@@ -15,18 +15,26 @@ from pydantic import BaseModel, Field
 from . import database, settings
 from .adapters.autodetect import autodetect_url
 from .adapters.base import new_client
-from .services import downloader, source_manager, steam_enricher, winget_manager
+from .services import downloader, release_calendar, source_manager, steam_enricher, winget_manager
 
 
 async def _periodic_sync_loop() -> None:
     try:
-        await source_manager.sync_sources()
+        await asyncio.gather(
+            source_manager.sync_sources(),
+            release_calendar.sync_calendar(force=False),
+            return_exceptions=True,
+        )
     except Exception:
         pass
     while True:
         await asyncio.sleep(settings.SYNC_INTERVAL_SECONDS)
         try:
-            await source_manager.sync_sources()
+            await asyncio.gather(
+                source_manager.sync_sources(),
+                release_calendar.sync_calendar(force=False),
+                return_exceptions=True,
+            )
         except Exception:
             pass
 
@@ -100,6 +108,15 @@ class WingetInstallRequest(BaseModel):
 
 class BookmarkRequest(BaseModel):
     item: dict[str, Any]
+
+
+class CalendarFavoriteRequest(BaseModel):
+    item: dict[str, Any]
+
+
+class CalendarTrackRequest(BaseModel):
+    query: str
+    favorite: bool = True
 
 
 # --------------------------------------------------------------------------- Salud y Estado
@@ -216,6 +233,53 @@ async def api_bookmark_toggle(req: BookmarkRequest):
         raise HTTPException(status_code=400, detail="Elemento inválido para guardar")
     saved = database.bookmark_toggle(req.item)
     return {"bookmarked": saved, "id": req.item["id"]}
+
+
+# --------------------------------------------------------------------------- Calendario de Lanzamientos (Releases.com style)
+
+@app.get("/api/calendar")
+async def api_calendar(
+    mode: str = Query(default="hot", pattern="^(hot|classic|favorites)$"),
+    genre: str | None = Query(default=None),
+    q: str | None = Query(default=None, max_length=120),
+    force_refresh: bool = Query(default=False),
+):
+    return await release_calendar.get_calendar_data(
+        mode=mode,
+        genre=genre or None,
+        q=q or None,
+        force_refresh=force_refresh,
+    )
+
+
+@app.post("/api/calendar/refresh")
+async def api_calendar_refresh():
+    return await release_calendar.sync_calendar(force=True)
+
+
+@app.get("/api/calendar/favorites")
+async def api_calendar_favorites():
+    items = release_calendar.list_favorites()
+    return {"items": items, "total": len(items)}
+
+
+@app.post("/api/calendar/favorites/toggle")
+async def api_calendar_favorite_toggle(req: CalendarFavoriteRequest):
+    if not req.item.get("appid"):
+        raise HTTPException(status_code=400, detail="Falta el identificador appid del juego")
+    saved = release_calendar.toggle_favorite(req.item)
+    return {"favorited": saved, "appid": int(req.item["appid"])}
+
+
+@app.post("/api/calendar/track")
+async def api_calendar_track(req: CalendarTrackRequest):
+    try:
+        item = await release_calendar.search_and_add_game_to_calendar(req.query, favorite=req.favorite)
+        return {"ok": True, "item": item}
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Error consultando Steam: {exc}") from exc
 
 
 # --------------------------------------------------------------------------- Gestión de Fuentes

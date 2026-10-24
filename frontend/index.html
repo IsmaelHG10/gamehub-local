@@ -31,6 +31,10 @@
           <span class="nav-btn-left">🔥 <span>Novedades</span></span>
           <span class="nav-badge" id="badge-latest">0</span>
         </button>
+        <button class="nav-btn" data-view="calendar">
+          <span class="nav-btn-left">📅 <span>Calendario</span></span>
+          <span class="nav-badge" id="badge-calendar">0</span>
+        </button>
         <button class="nav-btn" data-view="search">
           <span class="nav-btn-left">🔍 <span>Buscador</span></span>
           <span class="nav-badge">Ctrl+K</span>
@@ -126,6 +130,76 @@
           <div style="text-align:center;margin-top:24px;">
             <button id="btn-load-more" class="btn btn-secondary hidden">Cargar más juegos</button>
           </div>
+        </section>
+
+        <!-- VISTA CALENDARIO DE LANZAMIENTOS (Estilo Releases.com) -->
+        <section id="view-calendar" class="view-section hidden">
+          <div class="view-header">
+            <div>
+              <h1 class="view-title">📅 Calendario de Lanzamientos</h1>
+              <p class="view-subtitle">Consulta qué juegos salen cada día (modo Hot o Clásico), guárdalos en seguimiento con ★ y búscalos en tus fuentes al salir.</p>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+              <form id="cal-track-form" style="display:flex;gap:6px;">
+                <input
+                  type="text"
+                  id="cal-track-input"
+                  class="input-ctrl"
+                  placeholder="➕ Añadir juego específico (ej: GTA VI)..."
+                  style="min-width:235px;"
+                />
+                <button type="submit" class="btn btn-secondary btn-sm" id="btn-cal-track">Seguir ★</button>
+              </form>
+              <button class="btn btn-secondary btn-sm" id="btn-cal-refresh" title="Actualizar calendario desde Steam">
+                🔄 Actualizar
+              </button>
+            </div>
+          </div>
+
+          <div id="cal-alerts" class="hidden"></div>
+
+          <!-- Barra principal estilo Releases.com: Modos Hot/Clásico/Favoritos + Vistas Agenda/Mes/Semana -->
+          <div class="cal-toolbar">
+            <div class="seg-group" id="cal-mode-group">
+              <button class="seg-btn active" data-calmode="hot">🔥 Hot (Más Esperados)</button>
+              <button class="seg-btn" data-calmode="classic">📋 Clásico (Todos)</button>
+              <button class="seg-btn" data-calmode="favorites">⭐ Siguiendo (<span id="cal-fav-count">0</span>)</button>
+            </div>
+
+            <div class="seg-group" id="cal-layout-group">
+              <button class="seg-btn active" data-callayout="agenda">📰 Agenda Diaria</button>
+              <button class="seg-btn" data-callayout="month">🗓️ Mes</button>
+              <button class="seg-btn" data-callayout="week">📆 Semana</button>
+            </div>
+          </div>
+
+          <!-- Navegación temporal y búsqueda local -->
+          <div class="cal-nav-bar">
+            <button class="pill active" id="btn-cal-upcoming30">🚀 Próximos 30 días</button>
+            <div style="display:inline-flex;align-items:center;gap:6px;background:var(--bg-card);border:1px solid var(--border);border-radius:9px;padding:4px 8px;">
+              <button class="btn btn-sm btn-secondary" id="btn-cal-prev">◀</button>
+              <span class="cal-period-label" id="cal-period-label">Octubre 2026</span>
+              <button class="btn btn-sm btn-secondary" id="btn-cal-next">▶</button>
+            </div>
+            <button class="btn btn-sm btn-secondary" id="btn-cal-today">Hoy</button>
+
+            <input
+              type="search"
+              id="cal-search-inline"
+              class="input-ctrl"
+              placeholder="Filtrar por título en el calendario..."
+              style="margin-left:auto;min-width:210px;"
+            />
+          </div>
+
+          <!-- Filtros de género -->
+          <div class="filters-bar" id="cal-genre-pills" style="margin-bottom:18px;"></div>
+
+          <!-- Detalle desplegable al pulsar un día en la cuadrícula mensual -->
+          <div id="cal-selected-day-box" class="panel-box hidden"></div>
+
+          <!-- Contenedor dinámico del calendario -->
+          <div id="cal-container"></div>
         </section>
 
         <!-- VISTA 2: BUSCADOR UNIFICADO -->

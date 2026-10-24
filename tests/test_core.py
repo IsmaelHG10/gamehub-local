@@ -332,3 +332,48 @@ def test_fastapi_endpoints_and_security(isolated_env: Path, monkeypatch: pytest.
         )
         r_deps = client.get("/api/dependencies")
         assert r_deps.status_code == 200 and len(r_deps.json()["runtimes"]) >= 5
+
+
+# --------------------------------------------------------------------------- 5. Calendario de Lanzamientos + Favoritos
+
+def test_release_calendar_parsing_and_favorites(isolated_env: Path, monkeypatch: pytest.MonkeyPatch):
+    from backend.main import app
+    from backend.services import release_calendar
+
+    assert release_calendar.parse_steam_date("28 Oct, 2026") == ("2026-10-28", "day", "28 Octubre 2026")
+    assert release_calendar.parse_steam_date("Oct 5, 2026") == ("2026-10-05", "day", "5 Octubre 2026")
+    assert release_calendar.parse_steam_date("November 2026") == ("2026-11-98", "month", "Noviembre 2026")
+    assert release_calendar.parse_steam_date("Q1 2027") == ("2027-03-99", "quarter", "T1 2027")
+    assert release_calendar.parse_steam_date("Coming soon")[1] == "tba"
+
+    sample_html = """
+    <a class="search_result_row" data-ds-appid="4115450" data-ds-tagids="[19,122,29482]">
+      <span class="title">Phantom Blade Zero</span>
+      <span class="platform_img win"></span>
+      <div class="search_released">28 Oct, 2026</div>
+    </a>
+    """
+    parsed = release_calendar.parse_steam_search_html(sample_html, is_hot=True)
+    assert len(parsed) == 1
+    assert parsed[0]["appid"] == 4115450
+    assert parsed[0]["release_date"] == "2026-10-28"
+    assert "Acción" in parsed[0]["genres"] and "RPG" in parsed[0]["genres"]
+
+    release_calendar._save_calendar_events(parsed)
+
+    with TestClient(app) as client:
+        r_cal = client.get("/api/calendar?mode=hot")
+        assert r_cal.status_code == 200
+        cdata = r_cal.json()
+        assert cdata["total"] == 1
+        assert cdata["items"][0]["title"] == "Phantom Blade Zero"
+
+        # Guardar como favorito del calendario y consultar pestaña Mis Seguidos
+        r_fav = client.post("/api/calendar/favorites/toggle", json={"item": cdata["items"][0]})
+        assert r_fav.status_code == 200 and r_fav.json()["favorited"] is True
+
+        r_only_favs = client.get("/api/calendar?mode=favorites")
+        assert r_only_favs.status_code == 200
+        assert r_only_favs.json()["total"] == 1
+        assert r_only_favs.json()["favorites_count"] == 1
+

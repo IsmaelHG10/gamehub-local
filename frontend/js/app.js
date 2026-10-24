@@ -18,6 +18,18 @@ const state = {
   depsConfig: { runtimes: [], tools: [], safety_rules: [] },
   depsInstalled: {},
   jdOnline: false,
+  // Estado del Calendario (estilo Releases.com)
+  calMode: "hot",          // 'hot' | 'classic' | 'favorites'
+  calLayout: "agenda",     // 'agenda' | 'month' | 'week'
+  calUpcoming30: true,     // En Agenda: próximos 30 días dinámicos o mes concreto
+  calYear: new Date().getFullYear(),
+  calMonth: new Date().getMonth(), // 0-11
+  calWeekRef: new Date(),
+  calGenre: "",
+  calInlineFilter: "",
+  calSelectedDay: "",
+  calData: { items: [], alerts: [], available_genres: [], favorites_count: 0, today: "" },
+  calLoaded: false,
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -135,6 +147,7 @@ function switchView(view) {
   $$(".nav-btn").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
   $$(".view-section").forEach((s) => s.classList.toggle("hidden", s.id !== `view-${view}`));
 
+  if (view === "calendar") loadCalendar(false);
   if (view === "bookmarks") loadBookmarks();
   if (view === "dependencies" && state.depsConfig.runtimes.length === 0) loadDependencies();
   if (view === "sources") loadSources();
@@ -451,6 +464,525 @@ function renderSearchResults() {
   container.appendChild(list);
 }
 
+// --------------------------------------------------------------------------- Vista Calendario (Releases.com style)
+
+const MONTHS_ES = [
+  "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
+  "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
+];
+const WEEKDAYS_SHORT = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"];
+const WEEKDAYS_FULL = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
+
+function toIsoLocal(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function addDays(d, n) {
+  const copy = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  copy.setDate(copy.getDate() + n);
+  return copy;
+}
+
+function mondayOfWeek(d) {
+  const copy = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const dow = (copy.getDay() + 6) % 7; // 0 = Lunes, 6 = Domingo
+  copy.setDate(copy.getDate() - dow);
+  return copy;
+}
+
+function countdownMeta(calItem, todayIso) {
+  if (calItem.precision !== "day" || !calItem.release_date) {
+    return { label: calItem.window_label || "Próximamente", cls: "" };
+  }
+  const [ty, tm, td] = todayIso.split("-").map(Number);
+  const [ry, rm, rd] = calItem.release_date.split("-").map(Number);
+  const tDate = Date.UTC(ty, tm - 1, td);
+  const rDate = Date.UTC(ry, rm - 1, rd);
+  const diff = Math.round((rDate - tDate) / 86400000);
+
+  if (diff === 0) return { label: "🔥 ¡Sale HOY!", cls: "today" };
+  if (diff === 1) return { label: "Mañana", cls: "soon" };
+  if (diff > 1 && diff <= 14) return { label: `En ${diff} días`, cls: "soon" };
+  if (diff > 14) return { label: calItem.window_label || calItem.release_date, cls: "" };
+  if (diff === -1) return { label: "Salió ayer", cls: "" };
+  if (diff >= -7) return { label: `Hace ${Math.abs(diff)} d`, cls: "" };
+  return { label: calItem.window_label || calItem.release_date, cls: "" };
+}
+
+function formatDayHeading(isoDate, todayIso) {
+  const [y, m, d] = isoDate.split("-").map(Number);
+  const dt = new Date(y, m - 1, d);
+  const wname = WEEKDAYS_FULL[dt.getDay()];
+  const base = `${wname} ${d} de ${MONTHS_ES[m - 1]}${y !== new Date().getFullYear() ? " " + y : ""}`;
+
+  const [ty, tm, td] = todayIso.split("-").map(Number);
+  const diff = Math.round((Date.UTC(y, m - 1, d) - Date.UTC(ty, tm - 1, td)) / 86400000);
+  if (diff === 0) return `🟢 HOY · ${base}`;
+  if (diff === 1) return `⏳ Mañana · ${base}`;
+  if (diff === -1) return `Ayer · ${base}`;
+  return base;
+}
+
+function calItemToDrawerItem(c) {
+  return {
+    id: `cal-${c.appid}`,
+    raw_title: `${c.title} (${c.window_label || "Próximamente"})`,
+    clean_title: c.title,
+    source_id: "steam-calendar",
+    source_name: "Calendario Steam",
+    source_category: c.window_label || "Lanzamiento",
+    published_at: c.precision === "day" ? `${c.release_date}T12:00:00Z` : null,
+    page_url: c.store_url,
+    file_size: null,
+    uris: [],
+    excerpt: "",
+    image_url: c.header_url,
+    steam_info: {
+      appid: c.appid,
+      official_name: c.title,
+      poster_url: c.poster_url,
+      header_url: c.header_url,
+      store_url: c.store_url,
+    },
+  };
+}
+
+async function toggleCalendarFavorite(calItem, ev) {
+  ev?.stopPropagation();
+  try {
+    const res = await api("/api/calendar/favorites/toggle", {
+      method: "POST",
+      body: { item: calItem },
+    });
+    calItem.favorited = res.favorited;
+    // Sincronizar en la lista en memoria
+    state.calData.items.forEach((it) => {
+      if (it.appid === calItem.appid) it.favorited = res.favorited;
+    });
+    toast(res.favorited ? `★ Siguiendo «${calItem.title}» en tu Calendario` : `Dejaste de seguir «${calItem.title}»`);
+    if (state.calMode === "favorites" && !res.favorited) {
+      await loadCalendar(false);
+    } else {
+      const delta = res.favorited ? 1 : -1;
+      state.calData.favorites_count = Math.max(0, (state.calData.favorites_count || 0) + delta);
+      $("#cal-fav-count").textContent = String(state.calData.favorites_count);
+      $("#badge-calendar").textContent = String(state.calData.favorites_count);
+      renderCalendar();
+    }
+  } catch (err) {
+    toast(err.message, "err");
+  }
+}
+
+function renderCalendarCard(c, todayIso) {
+  const fallbacks = [c.header_url, svgPlaceholder(c.title)].filter(Boolean);
+  const primary = c.poster_url || fallbacks[0];
+  const cd = countdownMeta(c, todayIso);
+
+  const el = document.createElement("article");
+  el.className = "game-card";
+  el.innerHTML = `
+    <div class="poster-wrap">
+      <img
+        src="${esc(primary)}"
+        data-fallbacks="${esc(fallbacks.join("||"))}"
+        onerror="window.__imgFallback(this)"
+        loading="lazy"
+        alt="${esc(c.title)}"
+      />
+      <div class="card-badges-top">
+        <span class="countdown-pill ${cd.cls}">${esc(cd.label)}</span>
+        <button class="bookmark-btn ${c.favorited ? "saved" : ""}" title="${c.favorited ? "Quitar de seguimiento" : "Seguir lanzamiento (Favorito)"}">
+          ${c.favorited ? "★" : "☆"}
+        </button>
+      </div>
+      <div class="poster-overlay">
+        <div class="quick-actions">
+          <button class="btn btn-primary act-find" title="Buscar descargas en todas mis fuentes">🔍 Buscar</button>
+          <a class="btn btn-secondary act-steam" href="${esc(c.store_url)}" target="_blank" rel="noopener" title="Ver en Steam">↗</a>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <div class="card-title" title="${esc(c.title)}">${esc(c.title)}</div>
+      <div class="genre-mini-tags">
+        ${(c.genres || []).slice(0, 3).map((g) => `<span class="genre-mini">${esc(g)}</span>`).join("")}
+      </div>
+      <div class="card-meta">
+        <span>${esc(c.window_label || "Próximamente")}</span>
+        <span style="font-size:11px;color:var(--text-dim);">${esc((c.platforms || ["PC"]).join(" · "))}</span>
+      </div>
+    </div>
+  `;
+
+  el.querySelector(".bookmark-btn").addEventListener("click", (e) => toggleCalendarFavorite(c, e));
+  el.querySelector(".act-find").addEventListener("click", (e) => {
+    e.stopPropagation();
+    $("#global-search-input").value = c.title;
+    runSearch(c.title);
+  });
+  el.querySelector(".act-steam").addEventListener("click", (e) => e.stopPropagation());
+  el.addEventListener("click", () => openDetailDrawer(calItemToDrawerItem(c)));
+  return el;
+}
+
+async function loadCalendar(forceRefresh = false) {
+  const container = $("#cal-container");
+  if (!state.calLoaded || forceRefresh) {
+    container.innerHTML = `<div class="empty-state">Sincronizando calendario de lanzamientos desde Steam...</div>`;
+  }
+  try {
+    const params = new URLSearchParams({ mode: state.calMode });
+    if (forceRefresh) params.set("force_refresh", "true");
+    const data = await api(`/api/calendar?${params}`);
+    state.calData = data;
+    state.calLoaded = true;
+    $("#cal-fav-count").textContent = String(data.favorites_count || 0);
+    $("#badge-calendar").textContent = String(data.favorites_count || 0);
+    renderCalendarAlerts();
+    renderCalendarGenres();
+    renderCalendar();
+  } catch (err) {
+    toast(err.message, "err");
+  }
+}
+
+function renderCalendarAlerts() {
+  const box = $("#cal-alerts");
+  const alerts = state.calData.alerts || [];
+  if (!alerts.length) {
+    box.classList.add("hidden");
+    box.innerHTML = "";
+    return;
+  }
+  box.className = "cal-alert-banner";
+  const names = alerts.map((a) => `<strong>${esc(a.title)}</strong> (${a.release_date === state.calData.today ? "¡Sale HOY!" : a.window_label})`).join(" · ");
+  box.innerHTML = `
+    <div>🎉 <strong>Lanzamientos de tu lista disponibles:</strong> ${names}</div>
+    <button class="btn btn-primary btn-sm" id="btn-alert-search">🔍 Buscar «${esc(alerts[0].title)}» en mis fuentes</button>
+  `;
+  box.querySelector("#btn-alert-search").addEventListener("click", () => {
+    $("#global-search-input").value = alerts[0].title;
+    runSearch(alerts[0].title);
+  });
+}
+
+function renderCalendarGenres() {
+  const preferred = [
+    "", "Acción", "RPG", "Aventura", "Estrategia", "Terror", "Supervivencia",
+    "Shooter", "Simulación", "Roguelike", "Mundo Abierto", "Soulslike", "Indie", "Multijugador",
+  ];
+  const available = new Set(state.calData.available_genres || []);
+  const list = preferred.filter((g) => !g || available.has(g));
+  const wrap = $("#cal-genre-pills");
+  wrap.innerHTML = "";
+  list.forEach((g) => {
+    const btn = document.createElement("button");
+    btn.className = `pill ${state.calGenre === g ? "active" : ""}`;
+    btn.textContent = g || "Todos los géneros";
+    btn.addEventListener("click", () => {
+      state.calGenre = g;
+      renderCalendarGenres();
+      renderCalendar();
+    });
+    wrap.appendChild(btn);
+  });
+}
+
+function filteredCalendarItems() {
+  let items = state.calData.items || [];
+  if (state.calGenre) {
+    items = items.filter((it) => (it.genres || []).includes(state.calGenre));
+  }
+  const q = state.calInlineFilter.trim().toLowerCase();
+  if (q) {
+    items = items.filter((it) => it.title.toLowerCase().includes(q));
+  }
+  return items;
+}
+
+function updateCalendarNavLabels() {
+  const upBtn = $("#btn-cal-upcoming30");
+  upBtn.classList.toggle("hidden", state.calLayout !== "agenda" || state.calMode === "favorites");
+  upBtn.classList.toggle("active", state.calUpcoming30 && state.calLayout === "agenda");
+
+  const label = $("#cal-period-label");
+  if (state.calMode === "favorites" && state.calLayout === "agenda") {
+    label.textContent = "Todos mis seguidos";
+  } else if (state.calLayout === "week") {
+    const mon = mondayOfWeek(state.calWeekRef);
+    const sun = addDays(mon, 6);
+    label.textContent = `${mon.getDate()} ${MONTHS_ES[mon.getMonth()].slice(0, 3)} – ${sun.getDate()} ${MONTHS_ES[sun.getMonth()].slice(0, 3)} ${sun.getFullYear()}`;
+  } else if (state.calLayout === "agenda" && state.calUpcoming30) {
+    label.textContent = "Próximos 30 días";
+  } else {
+    label.textContent = `${MONTHS_ES[state.calMonth]} ${state.calYear}`;
+  }
+}
+
+function renderCalendar() {
+  updateCalendarNavLabels();
+  $("#cal-selected-day-box").classList.add("hidden");
+  const todayIso = state.calData.today || toIsoLocal(new Date());
+  const items = filteredCalendarItems();
+
+  if (state.calLayout === "month") {
+    renderCalendarMonth(items, todayIso);
+  } else if (state.calLayout === "week") {
+    renderCalendarWeek(items, todayIso);
+  } else {
+    renderCalendarAgenda(items, todayIso);
+  }
+}
+
+function renderCalendarAgenda(items, todayIso) {
+  const container = $("#cal-container");
+  container.innerHTML = "";
+
+  let scoped = items;
+  if (state.calMode !== "favorites" && !state.calInlineFilter.trim()) {
+    if (state.calUpcoming30) {
+      const endIso = toIsoLocal(addDays(new Date(), 35));
+      scoped = items.filter(
+        (it) =>
+          (it.precision === "day" && it.release_date >= todayIso && it.release_date <= endIso) ||
+          (it.precision !== "day" && (it.release_date || "").slice(0, 7) >= todayIso.slice(0, 7))
+      );
+    } else {
+      const ym = `${state.calYear}-${String(state.calMonth + 1).padStart(2, "0")}`;
+      scoped = items.filter((it) => (it.release_date || "").startsWith(ym));
+    }
+  }
+
+  if (!scoped.length) {
+    container.innerHTML = `
+      <div class="empty-state">
+        <h3 style="color:#fff;margin-bottom:6px;">
+          ${state.calMode === "favorites" ? "Aún no sigues ningún próximo lanzamiento" : "No hay lanzamientos registrados en este tramo"}
+        </h3>
+        <p>
+          ${state.calMode === "favorites"
+            ? "Marca cualquier juego con ★ en las pestañas Hot o Clásico (o añádelo arriba por nombre) para seguir su cuenta atrás."
+            : "Prueba cambiando al modo 📋 Clásico (Todos), navegando a otro mes con ◀ ▶ o quitando el filtro de género."}
+        </p>
+      </div>`;
+    return;
+  }
+
+  // Separar días exactos y ventanas estimadas (como Releases.com)
+  const byDay = new Map();
+  const windows = new Map();
+
+  scoped.forEach((it) => {
+    if (it.precision === "day" && it.release_date) {
+      if (!byDay.has(it.release_date)) byDay.set(it.release_date, []);
+      byDay.get(it.release_date).push(it);
+    } else {
+      const w = it.window_label || "Próximamente";
+      if (!windows.has(w)) windows.set(w, []);
+      windows.get(w).push(it);
+    }
+  });
+
+  const sortedDays = Array.from(byDay.keys()).sort();
+  sortedDays.forEach((dayIso) => {
+    const dayItems = byDay.get(dayIso);
+    const block = document.createElement("div");
+    block.className = "cal-day-block";
+    block.innerHTML = `
+      <div class="cal-day-header ${dayIso === todayIso ? "is-today" : ""}">
+        <div class="cal-day-title">${esc(formatDayHeading(dayIso, todayIso))}</div>
+        <span class="badge">${dayItems.length} juego${dayItems.length === 1 ? "" : "s"}</span>
+      </div>
+      <div class="poster-grid"></div>
+    `;
+    const grid = block.querySelector(".poster-grid");
+    dayItems.forEach((c) => grid.appendChild(renderCalendarCard(c, todayIso)));
+    container.appendChild(block);
+  });
+
+  // Ventanas estimadas (ej. Noviembre 2026, T1 2027, Próximamente)
+  Array.from(windows.entries()).slice(0, 6).forEach(([wLabel, wItems]) => {
+    const block = document.createElement("div");
+    block.className = "cal-day-block";
+    block.innerHTML = `
+      <div class="cal-day-header">
+        <div class="cal-day-title">📆 Ventana estimada · ${esc(wLabel)}</div>
+        <span class="badge">${wItems.length} juego${wItems.length === 1 ? "" : "s"}</span>
+      </div>
+      <div class="poster-grid"></div>
+    `;
+    const grid = block.querySelector(".poster-grid");
+    wItems.slice(0, 18).forEach((c) => grid.appendChild(renderCalendarCard(c, todayIso)));
+    container.appendChild(block);
+  });
+}
+
+function renderCalendarMonth(items, todayIso) {
+  const container = $("#cal-container");
+  container.innerHTML = "";
+
+  const head = document.createElement("div");
+  head.className = "cal-weekdays";
+  head.innerHTML = WEEKDAYS_SHORT.map((w) => `<div>${w}</div>`).join("");
+  container.appendChild(head);
+
+  const byDay = new Map();
+  items.forEach((it) => {
+    if (it.precision === "day" && it.release_date) {
+      if (!byDay.has(it.release_date)) byDay.set(it.release_date, []);
+      byDay.get(it.release_date).push(it);
+    }
+  });
+
+  const firstOfMonth = new Date(state.calYear, state.calMonth, 1);
+  const startCell = mondayOfWeek(firstOfMonth);
+  const grid = document.createElement("div");
+  grid.className = "cal-month-grid";
+
+  for (let i = 0; i < 42; i++) {
+    const cellDate = addDays(startCell, i);
+    const iso = toIsoLocal(cellDate);
+    const inMonth = cellDate.getMonth() === state.calMonth;
+    const dayGames = byDay.get(iso) || [];
+
+    // Si la última fila entera pertenece ya al mes siguiente, no la pintamos
+    if (i >= 35 && !inMonth && cellDate.getDate() <= 7 && i === 35) break;
+
+    const cell = document.createElement("div");
+    cell.className = [
+      "cal-cell",
+      inMonth ? "" : "outside",
+      iso === todayIso ? "today" : "",
+      dayGames.length ? "has-games" : "",
+      state.calSelectedDay === iso ? "selected" : "",
+    ].filter(Boolean).join(" ");
+
+    cell.innerHTML = `
+      <div class="cal-cell-top">
+        <span>${cellDate.getDate()} ${iso === todayIso ? "· HOY" : ""}</span>
+        ${dayGames.length ? `<span class="size-tag">${dayGames.length}</span>` : ""}
+      </div>
+      <div class="cal-thumbs">
+        ${dayGames.slice(0, 3).map((g) => `
+          <div class="cal-thumb-wrap ${g.favorited ? "fav" : ""}" title="${esc(g.title)}">
+            <img src="${esc(g.poster_url)}" data-fallbacks="${esc(g.header_url)}||${esc(svgPlaceholder(g.title))}" onerror="window.__imgFallback(this)" loading="lazy" alt="${esc(g.title)}" />
+          </div>
+        `).join("")}
+      </div>
+      ${dayGames.length > 3 ? `<div style="font-size:11px;color:var(--text-muted);text-align:right;margin-top:auto;">+${dayGames.length - 3} más</div>` : ""}
+    `;
+
+    if (dayGames.length) {
+      cell.addEventListener("click", () => {
+        state.calSelectedDay = iso;
+        $$(".cal-cell").forEach((c) => c.classList.remove("selected"));
+        cell.classList.add("selected");
+        showSelectedDayDetail(iso, dayGames, todayIso);
+      });
+    }
+    grid.appendChild(cell);
+  }
+
+  container.appendChild(grid);
+
+  // Ventanas del mes sin día exacto
+  const ym = `${state.calYear}-${String(state.calMonth + 1).padStart(2, "0")}`;
+  const monthTba = items.filter((it) => it.precision === "month" && (it.release_date || "").startsWith(ym));
+  if (monthTba.length) {
+    const block = document.createElement("div");
+    block.className = "cal-day-block";
+    block.style.marginTop = "22px";
+    block.innerHTML = `
+      <div class="cal-day-header">
+        <div class="cal-day-title">📆 Confirmados para ${MONTHS_ES[state.calMonth]} ${state.calYear} (día exacto por anunciar)</div>
+        <span class="badge">${monthTba.length}</span>
+      </div>
+      <div class="poster-grid"></div>
+    `;
+    const pgrid = block.querySelector(".poster-grid");
+    monthTba.forEach((c) => pgrid.appendChild(renderCalendarCard(c, todayIso)));
+    container.appendChild(block);
+  }
+}
+
+function showSelectedDayDetail(iso, dayGames, todayIso) {
+  const box = $("#cal-selected-day-box");
+  box.classList.remove("hidden");
+  box.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+      <strong style="font-size:16px;">📅 Lanzamientos del ${esc(formatDayHeading(iso, todayIso))} (${dayGames.length})</strong>
+      <button class="btn btn-secondary btn-sm" id="btn-close-daybox">Cerrar ✕</button>
+    </div>
+    <div class="poster-grid" id="selected-day-grid"></div>
+  `;
+  const g = box.querySelector("#selected-day-grid");
+  dayGames.forEach((c) => g.appendChild(renderCalendarCard(c, todayIso)));
+  box.querySelector("#btn-close-daybox").addEventListener("click", () => box.classList.add("hidden"));
+  box.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function renderCalendarWeek(items, todayIso) {
+  const container = $("#cal-container");
+  container.innerHTML = "";
+  const byDay = new Map();
+  items.forEach((it) => {
+    if (it.precision === "day" && it.release_date) {
+      if (!byDay.has(it.release_date)) byDay.set(it.release_date, []);
+      byDay.get(it.release_date).push(it);
+    }
+  });
+
+  const mon = mondayOfWeek(state.calWeekRef);
+  const grid = document.createElement("div");
+  grid.className = "cal-week-grid";
+
+  for (let i = 0; i < 7; i++) {
+    const d = addDays(mon, i);
+    const iso = toIsoLocal(d);
+    const list = byDay.get(iso) || [];
+    const col = document.createElement("div");
+    col.className = `cal-week-col ${iso === todayIso ? "today" : ""}`;
+    col.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:6px;border-bottom:1px solid var(--border);">
+        <div>
+          <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;font-weight:700;">${WEEKDAYS_SHORT[i]}</div>
+          <div style="font-size:16px;font-weight:800;">${d.getDate()} ${MONTHS_ES[d.getMonth()].slice(0, 3)}</div>
+        </div>
+        <span class="badge">${list.length}</span>
+      </div>
+      <div class="w-items" style="display:flex;flex-direction:column;gap:7px;"></div>
+    `;
+    const wWrap = col.querySelector(".w-items");
+    if (!list.length) {
+      wWrap.innerHTML = `<div style="font-size:12px;color:var(--text-dim);padding:12px 4px;text-align:center;">Sin lanzamientos</div>`;
+    } else {
+      list.forEach((c) => {
+        const row = document.createElement("div");
+        row.className = "cal-week-item";
+        row.innerHTML = `
+          <img src="${esc(c.poster_url)}" data-fallbacks="${esc(c.header_url)}||${esc(svgPlaceholder(c.title))}" onerror="window.__imgFallback(this)" loading="lazy" alt="${esc(c.title)}" />
+          <div style="min-width:0;flex:1;">
+            <div style="font-size:12.5px;font-weight:700;line-height:1.25;word-break:break-word;">${esc(c.title)}</div>
+            <div style="font-size:10.5px;color:var(--text-dim);margin-top:2px;">${esc((c.genres || []).slice(0, 2).join(" · "))}</div>
+          </div>
+          <button class="bookmark-btn ${c.favorited ? "saved" : ""}" style="width:26px;height:26px;flex-shrink:0;" title="Seguir">
+            ${c.favorited ? "★" : "☆"}
+          </button>
+        `;
+        row.querySelector(".bookmark-btn").addEventListener("click", (e) => toggleCalendarFavorite(c, e));
+        row.addEventListener("click", () => openDetailDrawer(calItemToDrawerItem(c)));
+        wWrap.appendChild(row);
+      });
+    }
+    grid.appendChild(col);
+  }
+  container.appendChild(grid);
+}
+
 // --------------------------------------------------------------------------- Vista 3: Guardados
 
 async function loadBookmarks() {
@@ -504,6 +1036,7 @@ async function openDetailDrawer(item) {
       ${httpLinks.length ? `<button class="btn btn-jd" id="d-jd">📦 Enviar a JDownloader 2 (${httpLinks.length})</button>` : ""}
       ${(magnets.length || httpLinks.length) ? `<button class="btn btn-secondary" id="d-copy">📋 Copiar enlaces</button>` : ""}
       ${item.page_url ? `<a class="btn btn-secondary" href="${esc(item.page_url)}" target="_blank" rel="noopener">🌐 Abrir Página Fuente ↗</a>` : ""}
+      <button class="btn btn-primary" id="d-search-hub">🔍 Buscar en mis fuentes</button>
       ${item.steam_info?.store_url ? `<a class="btn btn-secondary" href="${esc(item.steam_info.store_url)}" target="_blank" rel="noopener">🛒 Ver en Steam ↗</a>` : ""}
     </div>
     ${item.excerpt ? `<div class="req-box">${esc(item.excerpt)}</div>` : ""}
@@ -519,6 +1052,11 @@ async function openDetailDrawer(item) {
   body.querySelector("#d-copy")?.addEventListener("click", (e) =>
     copyText([...magnets, ...httpLinks].join("\n"), "Enlaces", e)
   );
+  body.querySelector("#d-search-hub")?.addEventListener("click", () => {
+    backdrop.classList.add("hidden");
+    $("#global-search-input").value = title;
+    runSearch(title);
+  });
 
   backdrop.classList.remove("hidden");
 
@@ -772,6 +1310,7 @@ async function refreshHealthBadges() {
     const h = await api("/api/health");
     updateJdIndicator(h.jdownloader?.online);
     $("#badge-bookmarks").textContent = String(h.stats?.bookmarks || 0);
+    $("#badge-calendar").textContent = String(h.stats?.calendar_favorites || 0);
     $("#badge-sources").textContent = String(h.sources_enabled || 0);
   } catch {}
 }
@@ -830,6 +1369,107 @@ function bindEvents() {
     $("#mode-cards").classList.add("active");
     $("#mode-grouped").classList.remove("active");
     renderSearchResults();
+  });
+
+  // Eventos del Calendario (estilo Releases.com)
+  $$("#cal-mode-group .seg-btn").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      state.calMode = btn.dataset.calmode;
+      $$("#cal-mode-group .seg-btn").forEach((b) => b.classList.toggle("active", b === btn));
+      loadCalendar(false);
+    })
+  );
+
+  $$("#cal-layout-group .seg-btn").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      state.calLayout = btn.dataset.callayout;
+      $$("#cal-layout-group .seg-btn").forEach((b) => b.classList.toggle("active", b === btn));
+      renderCalendar();
+    })
+  );
+
+  $("#btn-cal-upcoming30").addEventListener("click", () => {
+    state.calUpcoming30 = true;
+    renderCalendar();
+  });
+
+  $("#btn-cal-prev").addEventListener("click", () => {
+    if (state.calLayout === "week") {
+      state.calWeekRef = addDays(state.calWeekRef, -7);
+    } else {
+      state.calUpcoming30 = false;
+      state.calMonth -= 1;
+      if (state.calMonth < 0) {
+        state.calMonth = 11;
+        state.calYear -= 1;
+      }
+    }
+    renderCalendar();
+  });
+
+  $("#btn-cal-next").addEventListener("click", () => {
+    if (state.calLayout === "week") {
+      state.calWeekRef = addDays(state.calWeekRef, 7);
+    } else {
+      state.calUpcoming30 = false;
+      state.calMonth += 1;
+      if (state.calMonth > 11) {
+        state.calMonth = 0;
+        state.calYear += 1;
+      }
+    }
+    renderCalendar();
+  });
+
+  $("#btn-cal-today").addEventListener("click", () => {
+    const now = new Date();
+    state.calYear = now.getFullYear();
+    state.calMonth = now.getMonth();
+    state.calWeekRef = now;
+    if (state.calLayout === "agenda") state.calUpcoming30 = true;
+    renderCalendar();
+  });
+
+  $("#cal-search-inline").addEventListener("input", (e) => {
+    state.calInlineFilter = e.target.value;
+    renderCalendar();
+  });
+
+  $("#btn-cal-refresh").addEventListener("click", async () => {
+    const btn = $("#btn-cal-refresh");
+    btn.disabled = true;
+    btn.textContent = "⏳ Actualizando...";
+    try {
+      await loadCalendar(true);
+      toast("📅 Calendario actualizado con los últimos lanzamientos de Steam");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "🔄 Actualizar";
+    }
+  });
+
+  $("#cal-track-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const input = $("#cal-track-input");
+    const q = input.value.trim();
+    if (!q) return;
+    const btn = $("#btn-cal-track");
+    btn.disabled = true;
+    btn.textContent = "⏳...";
+    try {
+      const res = await api("/api/calendar/track", {
+        method: "POST",
+        body: { query: q, favorite: true },
+      });
+      toast(`★ Añadido «${res.item.title}» (${res.item.window_label}) a tus seguidos`);
+      input.value = "";
+      await loadCalendar(false);
+    } catch (err) {
+      toast(err.message, "err");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Seguir ★";
+    }
   });
 
   // Filtros Novedades

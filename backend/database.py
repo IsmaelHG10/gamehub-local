@@ -80,6 +80,40 @@ CREATE TABLE IF NOT EXISTS bookmarks (
     payload TEXT NOT NULL,
     saved_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS calendar_events (
+    appid INTEGER PRIMARY KEY,
+    title TEXT NOT NULL,
+    release_date TEXT,
+    precision TEXT NOT NULL DEFAULT 'tba',
+    window_label TEXT,
+    is_hot INTEGER NOT NULL DEFAULT 0,
+    genres TEXT NOT NULL DEFAULT '[]',
+    platforms TEXT NOT NULL DEFAULT '[]',
+    poster_url TEXT,
+    header_url TEXT,
+    store_url TEXT,
+    updated_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_cal_date ON calendar_events(release_date);
+CREATE INDEX IF NOT EXISTS idx_cal_hot ON calendar_events(is_hot);
+
+CREATE TABLE IF NOT EXISTS calendar_favorites (
+    appid INTEGER PRIMARY KEY,
+    title TEXT NOT NULL,
+    release_date TEXT,
+    precision TEXT NOT NULL DEFAULT 'tba',
+    window_label TEXT,
+    genres TEXT NOT NULL DEFAULT '[]',
+    platforms TEXT NOT NULL DEFAULT '[]',
+    poster_url TEXT,
+    header_url TEXT,
+    store_url TEXT,
+    saved_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS calendar_meta (
+    key TEXT PRIMARY KEY,
+    value REAL NOT NULL
+);
 """
 
 
@@ -385,9 +419,11 @@ def db_stats() -> dict:
         total_releases = conn.execute("SELECT COUNT(*) FROM releases").fetchone()[0]
         total_steam = conn.execute("SELECT COUNT(*) FROM steam_cache WHERE data IS NOT NULL").fetchone()[0]
         total_bookmarks = conn.execute("SELECT COUNT(*) FROM bookmarks").fetchone()[0]
+        total_cal_favs = conn.execute("SELECT COUNT(*) FROM calendar_favorites").fetchone()[0]
     return {
         "total_releases": total_releases,
         "cached_steam_covers": total_steam,
         "bookmarks": total_bookmarks,
+        "calendar_favorites": total_cal_favs,
     }
 
