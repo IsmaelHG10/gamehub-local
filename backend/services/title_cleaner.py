@@ -51,6 +51,14 @@ _PLUS_TAIL_RE = re.compile(
 _BRACKETS_RE = re.compile(r"\[[^\]]*\]|\{[^}]*\}|【[^】]*】")
 _PAREN_RE = re.compile(r"\(([^()]*)\)")
 _SCENE_GROUP_RE = re.compile(r"-[A-Za-z0-9_]{2,15}$")
+_STORE_PREFIX_RE = re.compile(
+    r"^(?:now available on steam|new on steam|daily deal|weekend deal|midweek madness)\s*[-–—:]\s*",
+    re.IGNORECASE,
+)
+_PROMO_SUFFIX_RE = re.compile(
+    r"(?:,\s*\d+%\s*off!?|\s+(?:is\s+)?free\s+(?:to\s+keep\s+)?(?:on|at|via)\s+.*)$",
+    re.IGNORECASE,
+)
 _EDGE_JUNK = " \t-–—|:,.+_/~"
 
 
@@ -75,7 +83,9 @@ def clean_game_title(raw_title: str) -> str:
     if not raw_title:
         return ""
     original = html.unescape(raw_title).replace("\u00a0", " ").strip()
-    text = _scene_to_spaces(original)
+    text = _STORE_PREFIX_RE.sub("", original)
+    text = _PROMO_SUFFIX_RE.sub("", text)
+    text = _scene_to_spaces(text)
     text = _BRACKETS_RE.sub(" ", text)
     text = _strip_tech_parens(text)
     text = _SIZE_RE.sub(" ", text)

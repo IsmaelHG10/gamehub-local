@@ -277,7 +277,12 @@ async function loadLatest(reset = true) {
 }
 
 function renderCategoryPills() {
-  const categories = ["", "Repacks", "Descarga Directa", "Catálogo JSON", "Retro / DRM-Free"];
+  const fromSources = state.sources
+    .filter((s) => s.enabled && s.type !== "search_url" && s.category)
+    .map((s) => s.category);
+  const base = ["Repacks", "Descarga Directa", "Catálogo JSON"];
+  const unique = Array.from(new Set([...fromSources, ...base]));
+  const categories = ["", ...unique];
   const wrap = $("#category-pills");
   wrap.innerHTML = "";
   categories.forEach((cat) => {

@@ -1,21 +1,75 @@
 {
   "sources": [
     {
-      "id": "catalogo-demo-local",
-      "name": "Catálogo Demo Local (Desactívalo al añadir tus webs)",
-      "type": "json_index",
-      "category": "Catálogo JSON",
-      "url": "config/demo_catalog.json",
+      "id": "regalos-pc-gratis",
+      "name": "Juegos 100% Gratis (Avisos Epic, Steam y GOG)",
+      "type": "rss",
+      "category": "Juegos Gratis Oficiales",
+      "url": "https://www.indiegamebundles.com/category/free/feed/",
       "search_url_template": "",
       "enabled": true
     },
     {
-      "id": "steam-novedades-rss",
-      "name": "Steam — Nuevos Lanzamientos Oficiales (Demo RSS)",
+      "id": "steam-nuevos-lanzamientos",
+      "name": "Steam — Nuevos Lanzamientos en PC",
       "type": "rss",
-      "category": "Demo Oficial",
-      "url": "https://store.steampowered.com/feeds/news/collection/steam/",
+      "category": "Lanzamientos PC",
+      "url": "https://store.steampowered.com/feeds/newreleases.xml",
       "search_url_template": "https://store.steampowered.com/search/?term={query}",
+      "enabled": true
+    },
+    {
+      "id": "itchio-gratis-windows",
+      "name": "Itch.io — Populares Gratis (Windows)",
+      "type": "rss",
+      "category": "Indies Gratis",
+      "url": "https://itch.io/games/popular/free/platform-windows.xml",
+      "search_url_template": "https://itch.io/search?q={query}",
+      "enabled": true
+    },
+    {
+      "id": "pcgamingwiki-fixes",
+      "name": "PCGamingWiki (Fixes, FPS, Ultrawide y Guardados)",
+      "type": "search_url",
+      "category": "Utilidades y Parches",
+      "url": "https://www.pcgamingwiki.com",
+      "search_url_template": "https://www.pcgamingwiki.com/w/index.php?search={query}",
+      "enabled": true
+    },
+    {
+      "id": "steamdb-versiones",
+      "name": "SteamDB (Último Build ID, Parches y DLCs)",
+      "type": "search_url",
+      "category": "Utilidades y Parches",
+      "url": "https://steamdb.info",
+      "search_url_template": "https://steamdb.info/instantsearch/?query={query}",
+      "enabled": true
+    },
+    {
+      "id": "archive-classic-pc",
+      "name": "Internet Archive — Classic PC Games",
+      "type": "search_url",
+      "category": "Retro / DRM-Free",
+      "url": "https://archive.org/details/classicpcgames",
+      "search_url_template": "https://archive.org/details/classicpcgames?tab=collection&query={query}",
+      "enabled": true
+    },
+    {
+      "id": "gog-sin-drm",
+      "name": "GOG.com — Catálogo Sin DRM",
+      "type": "search_url",
+      "category": "Retro / DRM-Free",
+      "url": "https://www.gog.com",
+      "search_url_template": "https://www.gog.com/en/games?query={query}",
+      "enabled": true
+    },
+    {
+      "id": "catalogo-demo-local",
+      "name": "Catálogo Demo Local (Ejemplo formato JSON)",
+      "type": "json_index",
+      "category": "Catálogo JSON",
+      "url": "config/demo_catalog.json",
+      "search_url_template": "",
       "enabled": false
     }
   ]
