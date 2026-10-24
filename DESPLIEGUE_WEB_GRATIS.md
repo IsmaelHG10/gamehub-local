@@ -22,7 +22,7 @@ Para que las cuentas de tus amigos y sus favoritos no se borren nunca a coste 0 
 
 ## 🥇 Opción 1 (Recomendada · Nube 24/7 · 0 € · Sin Tarjeta): Vercel
 
-GameHub ya incluye [`api/index.py`](api/index.py) y [`vercel.json`](vercel.json) listos para el plan **Hobby (Gratis)** de Vercel: no pide tarjeta, no se apaga 30 segundos cada cuarto de hora y despliega directo desde tu GitHub privado.
+GameHub ya incluye [`app.py`](app.py) y [`vercel.json`](vercel.json) listos para el plan **Hobby (Gratis)** de Vercel: no pide tarjeta, no se apaga 30 segundos cada cuarto de hora y despliega directo desde tu GitHub privado.
 
 1. Entra en **[vercel.com/signup](https://vercel.com/signup)** → elige plan **Hobby** (*Personal / Free*) → **Continue with GitHub**.
 2. Pulsa **Add New... → Project** y dale a **Import** en tu repositorio **`IsmaelHG10/gamehub-local`** *(si no sale, pulsa "Adjust GitHub App Permissions" para darle permiso a ese repo)*.

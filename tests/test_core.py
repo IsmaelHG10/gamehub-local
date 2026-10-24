@@ -722,7 +722,7 @@ def test_web_mode_multiuser_accounts_persistent_favorites_and_rbac(
 # --------------------------------------------------------------------------- 8. Punto de Entrada Serverless (Vercel) + Persistencia Síncrona
 
 def test_vercel_serverless_entrypoint_and_sync(isolated_env: Path, monkeypatch: pytest.MonkeyPatch):
-    from api.index import app as vercel_app
+    from app import app as vercel_app
     from backend.services import cloud_sync
 
     pushed_calls: list[int] = []
