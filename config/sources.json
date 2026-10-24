@@ -1,0 +1,22 @@
+{
+  "sources": [
+    {
+      "id": "catalogo-demo-local",
+      "name": "Catálogo Demo Local (Desactívalo al añadir tus webs)",
+      "type": "json_index",
+      "category": "Catálogo JSON",
+      "url": "config/demo_catalog.json",
+      "search_url_template": "",
+      "enabled": true
+    },
+    {
+      "id": "steam-novedades-rss",
+      "name": "Steam — Nuevos Lanzamientos Oficiales (Demo RSS)",
+      "type": "rss",
+      "category": "Demo Oficial",
+      "url": "https://store.steampowered.com/feeds/news/collection/steam/",
+      "search_url_template": "https://store.steampowered.com/search/?term={query}",
+      "enabled": false
+    }
+  ]
+}

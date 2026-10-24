@@ -1,0 +1,21 @@
+# Entorno virtual de Python
+.venv/
+venv/
+ENV/
+
+# Cachés de Python y tests
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Base de datos local SQLite y temporales
+data/*.db
+data/*.db-wal
+data/*.db-shm
+config/*.tmp
+
+# Sistema operativo / IDE
+.DS_Store
+Thumbs.db
+*.lnk

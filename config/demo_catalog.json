@@ -1,0 +1,53 @@
+{
+  "name": "Catálogo Demo Local (Desactivable)",
+  "downloads": [
+    {
+      "title": "Hollow Knight: Voidheart Edition (v1.5.78.11833 + All DLCs, MULTi12) - 7.4 GB",
+      "uris": [
+        "https://store.steampowered.com/app/367520/Hollow_Knight/"
+      ],
+      "uploadDate": "2026-10-24T15:30:00Z",
+      "fileSize": "7.4 GB"
+    },
+    {
+      "title": "Cyberpunk 2077: Ultimate Edition (v2.13 + Phantom Liberty, MULTi18) [Repack] - 64.2 GB",
+      "uris": [
+        "https://store.steampowered.com/app/1091500/Cyberpunk_2077/"
+      ],
+      "uploadDate": "2026-10-24T12:10:00Z",
+      "fileSize": "64.2 GB"
+    },
+    {
+      "title": "Baldur's Gate 3: Digital Deluxe Edition (Patch 7 Hotfix 28, MULTi15) - 108.5 GB",
+      "uris": [
+        "https://store.steampowered.com/app/1086940/Baldurs_Gate_3/"
+      ],
+      "uploadDate": "2026-10-23T21:45:00Z",
+      "fileSize": "108.5 GB"
+    },
+    {
+      "title": "Elden Ring: Shadow of the Erdtree Edition (v1.16 + All DLCs, MULTi14) - 52.8 GB",
+      "uris": [
+        "https://store.steampowered.com/app/1245620/ELDEN_RING/"
+      ],
+      "uploadDate": "2026-10-23T18:00:00Z",
+      "fileSize": "52.8 GB"
+    },
+    {
+      "title": "Hades II (Early Access Update 4, MULTi15) [Portable] - 9.1 GB",
+      "uris": [
+        "https://store.steampowered.com/app/1145350/Hades_II/"
+      ],
+      "uploadDate": "2026-10-22T19:20:00Z",
+      "fileSize": "9.1 GB"
+    },
+    {
+      "title": "Stardew Valley (v1.6.15 + Soundtrack, MULTi12) - 680 MB",
+      "uris": [
+        "https://store.steampowered.com/app/413150/Stardew_Valley/"
+      ],
+      "uploadDate": "2026-10-21T11:00:00Z",
+      "fileSize": "680 MB"
+    }
+  ]
+}

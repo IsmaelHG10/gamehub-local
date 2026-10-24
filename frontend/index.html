@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GameHub Local — Centro de Mando PC Gaming</title>
+  <link rel="stylesheet" href="/css/styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <!-- Barra lateral -->
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-logo" aria-hidden="true">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="6" y1="12" x2="10" y2="12"></line>
+            <line x1="8" y1="10" x2="8" y2="14"></line>
+            <line x1="15" y1="13" x2="15.01" y2="13"></line>
+            <line x1="18" y1="11" x2="18.01" y2="11"></line>
+            <rect x="2" y="6" width="20" height="12" rx="4"></rect>
+          </svg>
+        </div>
+        <div>
+          <div class="brand-title">GameHub <span class="badge" style="font-size:10px;">LOCAL</span></div>
+          <div class="brand-sub">Agregador &amp; Runtimes PC</div>
+        </div>
+      </div>
+
+      <nav class="nav-list" aria-label="Navegación principal">
+        <button class="nav-btn active" data-view="latest">
+          <span class="nav-btn-left">🔥 <span>Novedades</span></span>
+          <span class="nav-badge" id="badge-latest">0</span>
+        </button>
+        <button class="nav-btn" data-view="search">
+          <span class="nav-btn-left">🔍 <span>Buscador</span></span>
+          <span class="nav-badge">Ctrl+K</span>
+        </button>
+        <button class="nav-btn" data-view="bookmarks">
+          <span class="nav-btn-left">⭐ <span>Guardados</span></span>
+          <span class="nav-badge" id="badge-bookmarks">0</span>
+        </button>
+        <button class="nav-btn" data-view="dependencies">
+          <span class="nav-btn-left">🧰 <span>Dependencias</span></span>
+        </button>
+        <button class="nav-btn" data-view="sources">
+          <span class="nav-btn-left">⚙️ <span>Mis Fuentes</span></span>
+          <span class="nav-badge" id="badge-sources">0</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="status-box" title="Estado de conexión local con JDownloader 2 (puerto 127.0.0.1:9666)">
+          <span>
+            <span class="status-dot" id="jd-dot"></span>
+            <span id="jd-label">JDownloader 2: Off</span>
+          </span>
+          <button class="btn btn-sm btn-secondary" id="btn-check-jd" title="Volver a comprobar JDownloader 2">↻</button>
+        </div>
+        <button class="btn btn-secondary btn-sm" id="btn-desktop-shortcut">
+          📌 Crear icono en Escritorio
+        </button>
+      </div>
+    </aside>
+
+    <!-- Área principal -->
+    <div class="main-area">
+      <header class="topbar">
+        <form class="global-search" id="global-search-form">
+          <span class="search-icon">🔍</span>
+          <input
+            type="search"
+            id="global-search-input"
+            placeholder="Buscar juego en todas tus fuentes y catálogos..."
+            autocomplete="off"
+          />
+          <span class="kbd-hint">Ctrl+K</span>
+        </form>
+
+        <div class="topbar-right">
+          <span class="sync-meta" id="last-sync-label">Listo</span>
+          <button class="btn btn-primary" id="btn-refresh-all">
+            <span id="refresh-icon">🔄</span> Actualizar feeds ahora
+          </button>
+        </div>
+      </header>
+
+      <main class="content-scroll">
+        <!-- VISTA 1: NOVEDADES -->
+        <section id="view-latest" class="view-section">
+          <div id="demo-banner" class="onboarding-banner hidden">
+            <div>
+              <strong>👋 ¡Bienvenido a tu GameHub Local!</strong>
+              <div class="view-subtitle">
+                Añade tus páginas de confianza en <strong>⚙️ Mis Fuentes</strong> pegando sus URLs: el autodetector configurará sus novedades y buscadores sin tocar código.
+              </div>
+            </div>
+            <button class="btn btn-primary btn-sm" data-goto="sources">Añadir mis webs →</button>
+          </div>
+
+          <div class="view-header">
+            <div>
+              <h1 class="view-title">🔥 Últimas Subidas</h1>
+              <p class="view-subtitle">Juegos recientes detectados en tus fuentes activas con portadas automáticas de Steam.</p>
+            </div>
+          </div>
+
+          <div class="filters-bar">
+            <div id="category-pills" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+            <select id="filter-source" class="select-ctrl">
+              <option value="">Todas las fuentes activas</option>
+            </select>
+            <label class="toggle-label">
+              <input type="checkbox" id="filter-magnet" />
+              <span>🧲 Solo con Magnet directo</span>
+            </label>
+            <input
+              type="search"
+              id="filter-inline"
+              class="input-ctrl"
+              placeholder="Filtrar en pantalla..."
+              style="margin-left:auto;min-width:190px;"
+            />
+          </div>
+
+          <div id="latest-grid" class="poster-grid"></div>
+          <div style="text-align:center;margin-top:24px;">
+            <button id="btn-load-more" class="btn btn-secondary hidden">Cargar más juegos</button>
+          </div>
+        </section>
+
+        <!-- VISTA 2: BUSCADOR UNIFICADO -->
+        <section id="view-search" class="view-section hidden">
+          <div class="view-header">
+            <div>
+              <h1 class="view-title">🔍 Meta-Buscador Unificado</h1>
+              <p class="view-subtitle">Busca simultáneamente en APIs WordPress, índices JSON locales (FTS5) y lanzadores directos.</p>
+            </div>
+            <div style="display:flex;gap:8px;">
+              <button class="pill active" id="mode-grouped">Comparador por juego</button>
+              <button class="pill" id="mode-cards">Tarjetas individuales</button>
+            </div>
+          </div>
+
+          <div id="search-external-box" class="external-bar hidden">
+            <div class="external-bar-title">🌐 Acceso rápido en 1 clic en tus webs externas</div>
+            <div id="search-external-links" class="external-links-wrap"></div>
+          </div>
+
+          <div id="search-results"></div>
+        </section>
+
+        <!-- VISTA 3: GUARDADOS -->
+        <section id="view-bookmarks" class="view-section hidden">
+          <div class="view-header">
+            <div>
+              <h1 class="view-title">⭐ Mi Lista de Guardados</h1>
+              <p class="view-subtitle">Juegos marcados para revisar o descargar más tarde en un clic.</p>
+            </div>
+          </div>
+          <div id="bookmarks-grid" class="poster-grid"></div>
+        </section>
+
+        <!-- VISTA 4: DEPENDENCIAS Y UTILIDADES -->
+        <section id="view-dependencies" class="view-section hidden">
+          <div class="view-header">
+            <div>
+              <h1 class="view-title">🧰 Dependencias y Herramientas Esenciales</h1>
+              <p class="view-subtitle">Prepara tu Windows en pocos clics con paquetes 100% oficiales vía Winget para evitar errores de DLL al jugar.</p>
+            </div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;">
+              <button class="btn btn-secondary" id="btn-check-deps">🔍 Comprobar instalados</button>
+              <button class="btn btn-primary" id="btn-install-all-runtimes">⚡ Instalar Todos los Runtimes Esenciales</button>
+            </div>
+          </div>
+
+          <div class="section-block">
+            <h2 class="section-heading">⚙️ 1. Runtimes Esenciales para Juegos <span class="badge" id="deps-counter">Sin comprobar</span></h2>
+            <div id="runtimes-grid" class="dep-grid"></div>
+          </div>
+
+          <div class="section-block">
+            <h2 class="section-heading">🛠️ 2. Gestores de Descarga, Compresión y Red</h2>
+            <div id="tools-grid" class="dep-grid"></div>
+          </div>
+
+          <div class="section-block">
+            <h2 class="section-heading">🛡️ 3. Guía Rápida y Reglas de Seguridad</h2>
+            <div id="safety-grid" class="dep-grid"></div>
+          </div>
+        </section>
+
+        <!-- VISTA 5: MIS FUENTES -->
+        <section id="view-sources" class="view-section hidden">
+          <div class="view-header">
+            <div>
+              <h1 class="view-title">⚙️ Mis Fuentes</h1>
+              <p class="view-subtitle">Pega la dirección de tus webs o catálogos JSON: GameHub detectará automáticamente su API, RSS o buscador.</p>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+              <button class="btn btn-secondary btn-sm" id="btn-sync-json">🔄 Sincronizar índices JSON</button>
+              <button class="btn btn-secondary btn-sm" id="btn-export-sources">📤 Exportar (.json)</button>
+              <label class="btn btn-secondary btn-sm" style="cursor:pointer;">
+                📥 Importar (.json)
+                <input type="file" id="input-import-sources" accept=".json" class="hidden" />
+              </label>
+            </div>
+          </div>
+
+          <!-- Autodetector 1 clic -->
+          <div class="panel-box">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:8px;flex-wrap:wrap;">
+              <strong>✨ Añadir nueva página o catálogo JSON</strong>
+              <div style="display:flex;gap:8px;">
+                <button class="btn btn-secondary btn-sm" id="btn-toggle-batch">📋 Pegar varias URLs de golpe</button>
+                <button class="btn btn-secondary btn-sm" id="btn-toggle-manual">✏️ Configuración manual</button>
+              </div>
+            </div>
+
+            <form id="autodetect-form" class="autodetect-row">
+              <input
+                type="text"
+                id="autodetect-url"
+                class="input-ctrl"
+                placeholder="Ej: https://mi-sitio-favorito.com  o  https://ejemplo.org/catalogo.json"
+              />
+              <button type="submit" class="btn btn-primary" id="btn-autodetect">
+                ✨ Autodetectar y Añadir
+              </button>
+            </form>
+
+            <!-- Lote de URLs -->
+            <div id="batch-box" class="hidden" style="margin-top:14px;border-top:1px solid var(--border);padding-top:14px;">
+              <label style="display:block;font-size:12.5px;color:var(--text-muted);margin-bottom:6px;">
+                Pega una URL por línea (detectará y guardará todas en paralelo):
+              </label>
+              <textarea id="batch-urls" class="input-ctrl" rows="5" placeholder="https://sitio-uno.com&#10;https://sitio-dos.org&#10;https://ejemplo.com/fuente.json" style="width:100%;margin-bottom:10px;"></textarea>
+              <button type="button" class="btn btn-primary btn-sm" id="btn-run-batch">🚀 Detectar y Guardar Lista Completa</button>
+            </div>
+
+            <!-- Formulario manual / edición -->
+            <form id="manual-source-form" class="hidden" style="margin-top:14px;border-top:1px solid var(--border);padding-top:14px;">
+              <input type="hidden" id="src-id" />
+              <div class="form-grid">
+                <div class="field">
+                  <label>Nombre visible</label>
+                  <input type="text" id="src-name" class="input-ctrl" required placeholder="Nombre de la web" />
+                </div>
+                <div class="field">
+                  <label>Tipo de conector</label>
+                  <select id="src-type" class="select-ctrl">
+                    <option value="wp_api">WordPress API (Novedades + Buscador)</option>
+                    <option value="rss">Feed RSS / Atom (Novedades)</option>
+                    <option value="json_index">Catálogo JSON masivo (FTS5 + 1 clic)</option>
+                    <option value="search_url">Redirección directa de búsqueda (?s={query})</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label>Categoría</label>
+                  <input type="text" id="src-category" class="input-ctrl" value="Descarga Directa" placeholder="Repacks, Descarga Directa..." />
+                </div>
+                <div class="field">
+                  <label>URL principal (Web, Feed o .json)</label>
+                  <input type="text" id="src-url" class="input-ctrl" placeholder="https://..." />
+                </div>
+                <div class="field" style="grid-column: 1 / -1;">
+                  <label>Plantilla de búsqueda web opcional (usa <code>{query}</code> donde va el nombre del juego)</label>
+                  <input type="text" id="src-template" class="input-ctrl" placeholder="https://ejemplo.com/?s={query}" />
+                </div>
+              </div>
+              <div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap;">
+                <button type="submit" class="btn btn-primary btn-sm">💾 Guardar fuente</button>
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-probe-source">🧪 Probar fuente</button>
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-reset-manual">Limpiar</button>
+              </div>
+              <div id="probe-output" class="req-box hidden" style="margin-top:12px;"></div>
+            </form>
+          </div>
+
+          <div id="sources-list" class="sources-list"></div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <!-- Drawer lateral de detalles del juego -->
+  <div id="detail-backdrop" class="drawer-backdrop hidden">
+    <aside class="drawer" role="dialog" aria-modal="true">
+      <div class="drawer-hero" id="drawer-hero">
+        <button class="drawer-close" id="drawer-close" title="Cerrar (Esc)">✕</button>
+        <div class="drawer-hero-content">
+          <img id="drawer-poster" class="drawer-poster" alt="Póster" />
+          <div style="flex:1;min-width:0;">
+            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;" id="drawer-badges"></div>
+            <h2 id="drawer-title" style="font-size:21px;font-weight:800;line-height:1.2;"></h2>
+            <p id="drawer-raw" style="font-size:12px;color:var(--text-muted);margin-top:4px;word-break:break-word;"></p>
+          </div>
+        </div>
+      </div>
+
+      <div class="drawer-body" id="drawer-body"></div>
+    </aside>
+  </div>
+
+  <div id="toast-stack" class="toast-stack"></div>
+
+  <script type="module" src="/js/app.js"></script>
+</body>
+</html>

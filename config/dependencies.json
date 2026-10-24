@@ -1,0 +1,113 @@
+{
+  "runtimes": [
+    {
+      "id": "vcredist-aio",
+      "name": "Visual C++ Redistributable AIO (2005–2022)",
+      "winget_id": "abbodi1406.vcredist",
+      "official_url": "https://github.com/abbodi1406/vcredist/releases/latest",
+      "badge": "Imprescindible",
+      "fixes": "Soluciona errores de MSVCP140.dll, VCRUNTIME140.dll y VCRUNTIME140_1.dll",
+      "description": "Paquete todo-en-uno con todas las librerías Microsoft Visual C++ de 32 y 64 bits que pide el 95% de juegos de PC."
+    },
+    {
+      "id": "directx",
+      "name": "DirectX End-User Runtime (Junio 2010 / Legacy)",
+      "winget_id": "Microsoft.DirectX",
+      "official_url": "https://www.microsoft.com/es-es/download/details.aspx?id=35",
+      "badge": "Imprescindible",
+      "fixes": "Soluciona errores de XINPUT1_3.dll, d3dx9_43.dll y X3DAudio1_7.dll",
+      "description": "Librerías gráficas y de mando clásicas de Microsoft que Windows 10/11 no trae completas de fábrica."
+    },
+    {
+      "id": "dotnet-8",
+      "name": "Microsoft .NET Desktop Runtime 8",
+      "winget_id": "Microsoft.DotNet.DesktopRuntime.8",
+      "official_url": "https://dotnet.microsoft.com/es-es/download/dotnet/8.0",
+      "badge": "Recomendado",
+      "fixes": "Necesario para lanzadores modernos, gestores de mods y juegos en motores .NET",
+      "description": "Entorno de ejecución oficial de Microsoft para aplicaciones de escritorio y utilidades modernas."
+    },
+    {
+      "id": "xna-framework",
+      "name": "Microsoft XNA Framework Redistributable 4.0",
+      "winget_id": "Microsoft.XNARedist",
+      "official_url": "https://www.microsoft.com/en-us/download/details.aspx?id=20914",
+      "badge": "Indies",
+      "fixes": "Evita cierres al iniciar juegos indie como Terraria, Stardew Valley, Celeste o Bastion",
+      "description": "Framework de Microsoft imprescindible para decenas de juegos independientes clásicos y actuales."
+    },
+    {
+      "id": "openal",
+      "name": "OpenAL Audio Runtime",
+      "winget_id": "CreativeTechnology.OpenAL",
+      "official_url": "https://www.openal.org/downloads/",
+      "badge": "Audio 3D",
+      "fixes": "Soluciona errores de OpenAL32.dll y fallos de sonido al arrancar",
+      "description": "Librería de audio multiplataforma utilizada por numerosos motores gráficos en PC."
+    }
+  ],
+  "tools": [
+    {
+      "id": "7zip",
+      "name": "7-Zip",
+      "winget_id": "7zip.7zip",
+      "official_url": "https://www.7-zip.org/",
+      "badge": "Descompresor",
+      "description": "Ultraligero, gratuito y sin anuncios. Extrae archivos .7z, .rar y volúmenes divididos (.part1.rar / .001) sin errores de CRC."
+    },
+    {
+      "id": "qbittorrent",
+      "name": "qBittorrent",
+      "winget_id": "qBittorrent.qBittorrent",
+      "official_url": "https://www.qbittorrent.org/",
+      "badge": "Cliente Torrent",
+      "description": "El estándar de código abierto para abrir enlaces Magnet en 1 clic: limpio, rápido y libre de publicidad o minería."
+    },
+    {
+      "id": "jdownloader2",
+      "name": "JDownloader 2",
+      "winget_id": "AppWork.JDownloader",
+      "official_url": "https://jdownloader.org/jdownloader2",
+      "badge": "Descarga Directa",
+      "description": "Automatiza descargas directas multiparte, descomprime solo al terminar y se conecta directamente con GameHub en 1 clic."
+    },
+    {
+      "id": "cloudflare-warp",
+      "name": "Cloudflare WARP (1.1.1.1)",
+      "winget_id": "Cloudflare.Warp",
+      "official_url": "https://one.one.one.one/",
+      "badge": "Anti-Bloqueos ISP",
+      "description": "DNS cifrado y túnel ligero gratuito de Cloudflare: evita bloqueos temporales de operadoras en webs alojadas en Cloudflare/Fastly."
+    }
+  ],
+  "safety_rules": [
+    {
+      "title": "1. Usa siempre uBlock Origin en tu navegador",
+      "tag": "Regla de Oro",
+      "body": "Antes de abrir cualquier página externa o servidor de archivos, asegúrate de tener instalado uBlock Origin. Elimina botones falsos de descarga, pop-ups y redirecciones maliciosas.",
+      "links": [
+        { "label": "Firefox Add-ons", "url": "https://addons.mozilla.org/es/firefox/addon/ublock-origin/" },
+        { "label": "Edge Add-ons", "url": "https://microsoftedge.microsoft.com/addons/detail/ublock-origin/odfafepnkmbhccpbejgmiehpchacaeak" },
+        { "label": "Web Oficial GitHub", "url": "https://github.com/gorhill/uBlock" }
+      ]
+    },
+    {
+      "title": "2. ¿Repack o Descarga Directa Preinstalada?",
+      "tag": "Guía Rápida",
+      "body": "• Repacks: ocupan mucho menos al descargar (ideal si tienes poco espacio o conexión lenta), pero tardan más en descomprimir e instalar en el PC.\n• Preinstalados / DDL: pesan más al bajar, pero basta con descomprimir con 7-Zip y abrir el ejecutable del juego.",
+      "links": []
+    },
+    {
+      "title": "3. Extracción limpia de archivos divididos",
+      "tag": "Consejo 7-Zip",
+      "body": "Si una descarga viene en varias partes (parte1.rar, parte2.rar... o .7z.001, .7z.002), ponlas todas en la misma carpeta y haz clic derecho SOLO en la primera parte -> 7-Zip -> Extraer aquí. Él unirá el resto automáticamente.",
+      "links": []
+    },
+    {
+      "title": "4. Confía únicamente en tu lista verificada",
+      "tag": "Seguridad",
+      "body": "Añade en la pestaña 'Mis Fuentes' únicamente dominios exactos de confianza (cuidado con clones que cambian .site por .org o similares). Desde GameHub siempre irás al dominio exacto guardado sin pasar por buscadores llenos de clones.",
+      "links": []
+    }
+  ]
+}
