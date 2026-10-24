@@ -121,6 +121,11 @@ class CalendarTrackRequest(BaseModel):
 
 # --------------------------------------------------------------------------- Salud y Estado
 
+@app.get("/api/ping")
+async def api_ping():
+    return {"ok": True, "app": "GameHub Local"}
+
+
 @app.get("/api/health")
 async def api_health():
     sources = source_manager.load_sources()

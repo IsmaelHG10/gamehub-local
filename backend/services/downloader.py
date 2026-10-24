@@ -66,10 +66,10 @@ def copy_to_windows_clipboard(text: str) -> bool:
 async def check_jd_status(client: httpx.AsyncClient | None = None) -> dict:
     own = client is None
     if own:
-        client = httpx.AsyncClient(timeout=0.8)
+        client = httpx.AsyncClient(timeout=0.35)
     assert client is not None
     try:
-        r = await client.get(f"{JD_BASE}/jdcheck.js", timeout=0.8)
+        r = await client.get(f"{JD_BASE}/jdcheck.js", timeout=0.35)
         online = r.status_code == 200 and ("jdownloader" in r.text.lower() or len(r.text) > 0)
         return {"online": online, "endpoint": JD_BASE}
     except Exception:
