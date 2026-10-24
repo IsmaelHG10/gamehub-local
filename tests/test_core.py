@@ -719,4 +719,42 @@ def test_web_mode_multiuser_accounts_persistent_favorites_and_rbac(
         assert [c["title"] for c in restored_cal] == ["The Duskbloods"]
 
 
+# --------------------------------------------------------------------------- 8. Punto de Entrada Serverless (Vercel) + Persistencia Síncrona
+
+def test_vercel_serverless_entrypoint_and_sync(isolated_env: Path, monkeypatch: pytest.MonkeyPatch):
+    from api.index import app as vercel_app
+    from backend.services import cloud_sync
+
+    pushed_calls: list[int] = []
+
+    async def _fake_push() -> bool:
+        pushed_calls.append(1)
+        return True
+
+    monkeypatch.setattr(settings, "IS_SERVERLESS", True)
+    monkeypatch.setattr(settings, "DEPLOYMENT_MODE", "web")
+    monkeypatch.setattr(settings, "IS_WEB_MODE", True)
+    monkeypatch.setattr(settings, "REQUIRE_AUTH", True)
+    monkeypatch.setattr(settings, "GITHUB_STATE_TOKEN", "ghp_test_token_for_deterministic_hmac")
+    monkeypatch.setattr(settings, "GITHUB_STATE_REPO", "IsmaelHG10/gamehub-local")
+    monkeypatch.setattr(cloud_sync, "push_state_now", _fake_push)
+    monkeypatch.setattr(cloud_sync, "ensure_pulled", lambda *_a, **_kw: asyncio.sleep(0))
+
+    # Clave secreta determinista derivada del token (sin depender de archivos efímeros)
+    k1 = settings.get_secret_key()
+    k2 = settings.get_secret_key()
+    assert len(k1) == 64 and k1 == k2
+
+    with TestClient(vercel_app) as client:
+        assert client.get("/").status_code == 200
+        r_reg = client.post(
+            "/api/auth/register",
+            json={"username": "ismael_vercel", "password": "vercelPassword1"},
+        )
+        assert r_reg.status_code == 200
+        # En modo Serverless (Vercel), el guardado en GitHub se ejecuta antes de cerrar la petición HTTP
+        assert len(pushed_calls) == 1
+
+
+
 

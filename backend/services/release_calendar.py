@@ -16,7 +16,7 @@ from urllib.parse import unquote
 import httpx
 from bs4 import BeautifulSoup, Tag
 
-from .. import database
+from .. import database, settings
 from ..adapters.base import new_client
 from .steam_enricher import poster_urls
 
@@ -1245,26 +1245,38 @@ async def sync_calendar(force: bool = False) -> dict:
             if cnt > 0:
                 return {"synced": False, "cached": True, "count": cnt, "last_sync": last}
 
-        sem = asyncio.Semaphore(4)
-        async with new_client(timeout=14.0) as client:
-            tasks = [
-                # 1) Steam PC: Hot + Clásico
-                _fetch_steam_batch(client, sem, 0, 100, is_hot=True, filter="popularcomingsoon"),
-                _fetch_steam_batch(client, sem, 100, 100, is_hot=True, filter="popularcomingsoon"),
-                _fetch_steam_batch(client, sem, 200, 100, is_hot=True, filter="popularcomingsoon"),
-                _fetch_steam_batch(client, sem, 0, 100, is_hot=True, only_recent_days=60, filter="topsellers"),
-                _fetch_steam_batch(client, sem, 100, 100, is_hot=True, only_recent_days=60, filter="topsellers"),
-                _fetch_steam_batch(client, sem, 0, 100, is_hot=False, filter="comingsoon"),
-                _fetch_steam_batch(client, sem, 100, 100, is_hot=False, filter="comingsoon"),
-                _fetch_steam_batch(client, sem, 0, 100, is_hot=False, sort_by="Released_DESC"),
-                _fetch_steam_batch(client, sem, 100, 100, is_hot=False, sort_by="Released_DESC"),
-                # 2) Nintendo Switch 2 & Switch (Nintendo eShop Oficial España)
-                _fetch_nintendo_events(client),
-                # 3) PlayStation 5 (PlayStation España Oficial)
-                _fetch_playstation_events(client),
-                # 4) Calendario Editorial Multi-Plataforma 2026-2027 (PC, Switch 2, PS5, Xbox Series, Switch)
-                _fetch_wikipedia_events(),
-            ]
+        sem = asyncio.Semaphore(5 if settings.IS_SERVERLESS else 4)
+        net_timeout = 7.0 if settings.IS_SERVERLESS else 14.0
+        async with new_client(timeout=net_timeout) as client:
+            if settings.IS_SERVERLESS:
+                tasks = [
+                    _fetch_steam_batch(client, sem, 0, 100, is_hot=True, filter="popularcomingsoon"),
+                    _fetch_steam_batch(client, sem, 100, 100, is_hot=True, filter="popularcomingsoon"),
+                    _fetch_steam_batch(client, sem, 0, 100, is_hot=True, only_recent_days=60, filter="topsellers"),
+                    _fetch_steam_batch(client, sem, 0, 100, is_hot=False, filter="comingsoon"),
+                    _fetch_nintendo_events(client),
+                    _fetch_playstation_events(client),
+                    _fetch_wikipedia_events(),
+                ]
+            else:
+                tasks = [
+                    # 1) Steam PC: Hot + Clásico
+                    _fetch_steam_batch(client, sem, 0, 100, is_hot=True, filter="popularcomingsoon"),
+                    _fetch_steam_batch(client, sem, 100, 100, is_hot=True, filter="popularcomingsoon"),
+                    _fetch_steam_batch(client, sem, 200, 100, is_hot=True, filter="popularcomingsoon"),
+                    _fetch_steam_batch(client, sem, 0, 100, is_hot=True, only_recent_days=60, filter="topsellers"),
+                    _fetch_steam_batch(client, sem, 100, 100, is_hot=True, only_recent_days=60, filter="topsellers"),
+                    _fetch_steam_batch(client, sem, 0, 100, is_hot=False, filter="comingsoon"),
+                    _fetch_steam_batch(client, sem, 100, 100, is_hot=False, filter="comingsoon"),
+                    _fetch_steam_batch(client, sem, 0, 100, is_hot=False, sort_by="Released_DESC"),
+                    _fetch_steam_batch(client, sem, 100, 100, is_hot=False, sort_by="Released_DESC"),
+                    # 2) Nintendo Switch 2 & Switch (Nintendo eShop Oficial España)
+                    _fetch_nintendo_events(client),
+                    # 3) PlayStation 5 (PlayStation España Oficial)
+                    _fetch_playstation_events(client),
+                    # 4) Calendario Editorial Multi-Plataforma 2026-2027 (PC, Switch 2, PS5, Xbox Series, Switch)
+                    _fetch_wikipedia_events(),
+                ]
             batches = await asyncio.gather(*tasks, return_exceptions=True)
 
         collected: list[dict] = []
@@ -1274,7 +1286,10 @@ async def sync_calendar(force: bool = False) -> dict:
 
         merged = merge_calendar_items(collected)
         try:
-            await _enrich_wiki_artwork(merged)
+            if settings.IS_SERVERLESS:
+                await asyncio.wait_for(_enrich_wiki_artwork(merged[:120]), timeout=3.5)
+            else:
+                await _enrich_wiki_artwork(merged)
         except Exception:
             pass
 

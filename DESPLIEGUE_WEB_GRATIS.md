@@ -1,67 +1,53 @@
-# 🌐 Publicar GameHub en la Nube 24/7 Gratis (0 €)
+# 🌐 Publicar GameHub Gratis (0 € · Sin Tarjeta)
 
-GameHub ya está preparado con **Modo Web Cloud**, **cuentas de usuario (Crear cuenta / Iniciar sesión)**, **código de invitación privado para tus amigos** y **persistencia eterna a coste 0 €**.
+Hemos adaptado el código de GameHub para que funcione de forma nativa en **Vercel Serverless** (además de contenedores Docker y enlace directo desde tu PC), evitando los bloqueos recientes de Hugging Face (que pasó Docker a pago PRO) y los falsos positivos anti-VPN de Render.
 
-> [!IMPORTANT]
-> Seguirás pudiendo abrir `Iniciar_GameHub.bat` en tu PC exactamente igual que antes. El mismo proyecto detecta automáticamente si corre en tu escritorio (`local`) o en un servidor web (`web`).
-
----
-
-## 🧠 ¿Cómo se guardan las cuentas y favoritos sin pagar bases de datos?
-
-Los servidores gratuitos (Render, Hugging Face Spaces, Koyeb) reinician su disco temporal de vez en cuando, y las bases de datos gratuitas como *Render Postgres* se borran a los 30 días o *Supabase Free* se pausa a los 7 días.
-
-Para evitarlo **para siempre a coste 0 €**, GameHub incluye [`cloud_sync.py`](backend/services/cloud_sync.py):
-- Guarda automáticamente usuarios (con contraseñas cifradas `PBKDF2-SHA256`), `⭐ Guardados`, `📅 Favoritos del Calendario` y `⚙️ Mis Fuentes` en una rama separada llamada **`gamehub-state`** dentro de tu propio repositorio privado `IsmaelHG10/gamehub-local`.
-- Al ir en una rama independiente de `main`, **nunca provoca bucles de redespliegue**, nunca caduca y las lecturas siguen siendo instantáneas (`<1 ms`) en SQLite.
+> [!WARNING]
+> **Consejo clave antes de registrarte en cualquier plataforma gratuita:**
+> Si estás en un portátil con **Zscaler / VPN corporativa** activa, los sistemas antifraude automáticos (como le ocurrió a Render) suelen suspender las cuentas nuevas al detectar IPs de proxy/VPN junto con una cuenta de GitHub recién creada. **Haz el registro desde tu móvil con 4G/5G (o desconectando la VPN un momento)** y no tendrás ningún bloqueo.
 
 ---
 
-## Paso 1 (1 min): Crear el Token de Persistencia en GitHub
+## Paso Previo (1 min · Solo para Nube 24/7): Token de GitHub para Guardar Cuentas
+
+Para que las cuentas de tus amigos y sus favoritos no se borren nunca a coste 0 €:
 
 1. Entra en [GitHub → Fine-grained Personal Access Tokens](https://github.com/settings/personal-access-tokens/new).
-2. **Token name:** `gamehub-cloud-state`
-3. **Expiration:** *No expiration* (o *1 year*).
-4. **Repository access:** Selecciona **Only select repositories** → elige **`IsmaelHG10/gamehub-local`**.
-5. Despliega **Repository permissions** → busca **Contents** → cámbialo a **Read and write**.
-6. Pulsa **Generate token** y copia el código `github_pat_...` (lo pegarás en el Paso 2).
+2. **Token name:** `gamehub-cloud-state` · **Expiration:** *No expiration* (o *1 year*).
+3. **Repository access:** **Only select repositories** → elige **`IsmaelHG10/gamehub-local`**.
+4. **Repository permissions** → despliega y pon **Contents: Read and write**.
+5. Pulsa **Generate token** y copia el código `github_pat_...`.
 
 ---
 
-## Paso 2 (2 min): Elegir dónde alojarlo Gratis (0 €)
+## 🥇 Opción 1 (Recomendada · Nube 24/7 · 0 € · Sin Tarjeta): Vercel
 
-### Opción A1 — Render.com (La más directa desde tu GitHub privado)
+GameHub ya incluye [`api/index.py`](api/index.py) y [`vercel.json`](vercel.json) listos para el plan **Hobby (Gratis)** de Vercel: no pide tarjeta, no se apaga 30 segundos cada cuarto de hora y despliega directo desde tu GitHub privado.
 
-1. Crea cuenta gratis (con tu propio botón *Continue with GitHub*) en **[render.com](https://render.com)** *(no pide tarjeta para el plan Free)*.
-2. Pulsa **New +** → **Blueprint** (o **Web Service**) y selecciona tu repositorio **`IsmaelHG10/gamehub-local`**.
-3. Render leerá automáticamente el archivo [`render.yaml`](render.yaml) (`Runtime: Docker`, `Plan: Free`).
-4. Rellena las variables que te pide en pantalla:
-   - `GITHUB_STATE_TOKEN`: pega el token `github_pat_...` del Paso 1.
-   - `GAMEHUB_INVITE_CODE`: pon una clave para tus amigos (ej. `amigos2026`). Si la dejas vacía, cualquiera con el enlace podrá registrarse.
-5. Pulsa **Deploy**. En ~2 minutos tendrás tu URL `https://gamehub-xxxx.onrender.com` lista para pasar por Discord/WhatsApp.
-
-> [!TIP]
-> En el plan gratuito de Render, si nadie entra durante 15 minutos el servidor entra en reposo y tarda ~25 segundos en despertar la primera vez que alguien abre el enlace (conservando intactas todas las cuentas y favoritos gracias al Paso 1). Si quieres evitar ese sueño de 15 min gratis, puedes añadir tu URL `https://.../api/ping` en [cron-job.org](https://cron-job.org) cada 10 minutos, o usar Hugging Face Spaces abajo.
+1. Entra en **[vercel.com/signup](https://vercel.com/signup)** → elige plan **Hobby** (*Personal / Free*) → **Continue with GitHub**.
+2. Pulsa **Add New... → Project** y dale a **Import** en tu repositorio **`IsmaelHG10/gamehub-local`** *(si no sale, pulsa "Adjust GitHub App Permissions" para darle permiso a ese repo)*.
+3. Despliega la sección **Environment Variables** antes de pulsar Deploy y añade:
+   - **`GITHUB_STATE_TOKEN`** = pega tu `github_pat_...` del paso anterior.
+   - **`GAMEHUB_INVITE_CODE`** = *(opcional)* una contraseña de grupo para tus amigos, ej. `amigos2026`.
+   *(No necesitas añadir nada más: el repositorio `IsmaelHG10/gamehub-local`, la rama `gamehub-state`, el modo `web` y la firma criptográfica de sesión se configuran automáticamente).*
+4. Pulsa **Deploy**. En ~45 segundos tendrás tu web pública `https://gamehub-local-xxxx.vercel.app` activa 24/7.
 
 ---
 
-### Opción A2 — Hugging Face Spaces (16 GB RAM gratis y sin apagarse cada 15 min)
+## 🥈 Opción 2 (Alternativa Nube Docker · 0 € · Sin Tarjeta): Back4app Containers o Leapcell
 
-1. Crea cuenta gratis en **[huggingface.co](https://huggingface.co)** y ve a **[New Space](https://huggingface.co/new-space)**.
-2. Elige un nombre (ej. `gamehub`), selecciona **Space SDK: Docker** → **Blank**, hardware **CPU basic (Free · 2 vCPU · 16 GB RAM)** y visibilidad **Public** *(tu app estará igualmente protegida por pantalla de Login + `GAMEHUB_INVITE_CODE`)*.
-3. En la pestaña **Settings → Variables and secrets** de tu Space, añade como **New secret**:
-   - `GAMEHUB_SECRET_KEY` = una frase larga aleatoria cualquiera
-   - `GAMEHUB_INVITE_CODE` = la clave que quieras compartir con tus amigos
-   - `GITHUB_STATE_REPO` = `IsmaelHG10/gamehub-local`
-   - `GITHUB_STATE_BRANCH` = `gamehub-state`
-   - `GITHUB_STATE_TOKEN` = el token `github_pat_...` del Paso 1
-4. Sube los archivos del proyecto al Space (o añade el Space como segundo `git remote` desde esta carpeta) y arrancará automáticamente en `https://<tu-usuario>-gamehub.hf.space`.
+Si prefieres un contenedor Docker tradicional gratuito sin tarjeta usando el [`Dockerfile`](Dockerfile) incluido:
+
+- **[Back4app Containers](https://www.back4app.com/lander/containers-caas)** (*Plan Free: 1 contenedor gratis sin tarjeta*): Conecta GitHub → elige `IsmaelHG10/gamehub-local` → añade `GITHUB_STATE_TOKEN` y `GAMEHUB_INVITE_CODE` → Deploy.
+- **[Leapcell](https://leapcell.io)** (*Plan Free Python/FastAPI sin tarjeta*): Importa `IsmaelHG10/gamehub-local` → comando `uvicorn backend.main:app --host 0.0.0.0 --port 8080` → añade `GITHUB_STATE_TOKEN` → Deploy.
 
 ---
 
-## 👥 Cómo funciona para ti y tus amigos
+## ⚡ Opción 3 (Cero Registros en Ninguna Web · Instantáneo): `Compartir_Web_Amigos.bat`
 
-1. **Tú creas la primera cuenta:** La primera persona que se registra se convierte automáticamente en **👑 Administrador** (puede añadir, editar o importar fuentes en **⚙️ Mis Fuentes** para todo el grupo).
-2. **Tus amigos crean su propia cuenta:** Entran al enlace, pulsan **✨ Crear cuenta**, escriben su usuario, contraseña y el código de invitación (si configuraste `GAMEHUB_INVITE_CODE`).
-3. **Favoritos 100% independientes y permanentes:** Lo que cada amigo guarde en **⭐ Guardados** o siga con **★** en el **📅 Calendario (PC, Switch 2, PS5...)** es privado de su cuenta y se mantiene cada vez que vuelva a iniciar sesión desde cualquier dispositivo.
-4. **Descargas directas en su propio PC:** Al pulsar **🧲 Magnet** o **📦 JD2** en la web, el navegador de tu amigo abre directamente su cliente Torrent local o envía los enlaces al JDownloader 2 (`127.0.0.1:9666`) de **su propio ordenador**.
+Si quieres enseñárselo a tus amigos **ahora mismo en 10 segundos sin crearte cuenta en ningún sitio**:
+
+1. Haz doble clic en **`Compartir_Web_Amigos.bat`**.
+2. Escribe un código de invitación si quieres (o pulsa `Enter`).
+3. La consola usará el cliente `ssh` integrado de Windows para darte al instante una dirección pública temporal **`https://xxxx.lhr.life`**.
+4. Tus amigos entran a ese enlace, **crean su cuenta**, guardan sus juegos favoritos en la base de datos de tu propio PC (`data/gamehub.db`, permanente sin necesidad siquiera de token) y cuando cierres la ventana negra el enlace se apaga solo.

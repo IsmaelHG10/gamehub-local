@@ -69,6 +69,15 @@ app = FastAPI(
 )
 
 
+@app.middleware("http")
+async def _serverless_state_middleware(request: Request, call_next):
+    path = request.url.path
+    if path.startswith("/api/") and path != "/api/ping":
+        database.init_db()
+        await cloud_sync.ensure_pulled()
+    return await call_next(request)
+
+
 # --------------------------------------------------------------------------- Modelos Pydantic
 
 class RegisterRequest(BaseModel):
@@ -186,7 +195,7 @@ async def api_auth_register(req: RegisterRequest, response: Response):
 
     token = auth.create_session_token(user)
     _set_auth_cookie(response, token)
-    cloud_sync.schedule_push()
+    await cloud_sync.persist_state()
     return {"ok": True, "token": token, "user": user}
 
 
@@ -348,7 +357,7 @@ async def api_bookmark_toggle(
     if not req.item.get("id") or not req.item.get("raw_title"):
         raise HTTPException(status_code=400, detail="Elemento inválido para guardar")
     saved = database.bookmark_toggle(req.item, user_id=_uid(user))
-    cloud_sync.schedule_push()
+    await cloud_sync.persist_state()
     return {"bookmarked": saved, "id": req.item["id"]}
 
 
@@ -398,7 +407,7 @@ async def api_calendar_favorite_toggle(
     )
     req.item["appid"] = appid
     saved = release_calendar.toggle_favorite(req.item, user_id=_uid(user))
-    cloud_sync.schedule_push()
+    await cloud_sync.persist_state()
     return {"favorited": saved, "appid": appid}
 
 
@@ -413,7 +422,7 @@ async def api_calendar_track(
             favorite=req.favorite,
             user_id=_uid(user),
         )
-        cloud_sync.schedule_push()
+        await cloud_sync.persist_state()
         return {"ok": True, "item": item}
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -438,7 +447,7 @@ async def api_save_source(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    cloud_sync.schedule_push()
+    await cloud_sync.persist_state()
     sync_res = None
     if payload.sync_now and saved.get("enabled") and saved.get("type") != "search_url":
         sync_res = await source_manager.sync_sources(source_id=saved["id"])
@@ -456,7 +465,7 @@ async def api_toggle_source(
         raise HTTPException(status_code=404, detail="Fuente no encontrada")
     target["enabled"] = not target.get("enabled", True)
     source_manager.save_sources(sources)
-    cloud_sync.schedule_push()
+    await cloud_sync.persist_state()
     if target["enabled"] and target.get("type") != "search_url":
         counts = database.count_by_source()
         if counts.get(source_id, 0) == 0:
@@ -471,7 +480,7 @@ async def api_delete_source(
 ):
     if not source_manager.delete_source(source_id):
         raise HTTPException(status_code=404, detail="Fuente no encontrada")
-    cloud_sync.schedule_push()
+    await cloud_sync.persist_state()
     return {"deleted": True, "id": source_id}
 
 
@@ -512,7 +521,7 @@ async def api_autodetect_batch(
         results = await asyncio.gather(*(_detect_one(u) for u in cleaned_urls[:30]))
 
     if req.auto_save and any(r["ok"] for r in results):
-        cloud_sync.schedule_push()
+        await cloud_sync.persist_state()
         await source_manager.sync_sources()
 
     return {
@@ -544,7 +553,7 @@ async def api_import_sources(
     _admin: dict | None = Depends(auth.require_admin_or_local),
 ):
     res = source_manager.import_sources(req.sources, merge=req.merge)
-    cloud_sync.schedule_push()
+    await cloud_sync.persist_state()
     await source_manager.sync_sources()
     return res
 
@@ -659,10 +668,13 @@ async def api_create_desktop_shortcut(_user: dict | None = Depends(auth.require_
 
 # --------------------------------------------------------------------------- Frontend Estático
 
-if (settings.FRONTEND_DIR / "css").exists() or True:
-    settings.FRONTEND_DIR.mkdir(parents=True, exist_ok=True)
-    (settings.FRONTEND_DIR / "css").mkdir(parents=True, exist_ok=True)
-    (settings.FRONTEND_DIR / "js").mkdir(parents=True, exist_ok=True)
+try:
+    if not (settings.FRONTEND_DIR / "css").exists():
+        settings.FRONTEND_DIR.mkdir(parents=True, exist_ok=True)
+        (settings.FRONTEND_DIR / "css").mkdir(parents=True, exist_ok=True)
+        (settings.FRONTEND_DIR / "js").mkdir(parents=True, exist_ok=True)
+except OSError:
+    pass
 
 app.mount("/css", StaticFiles(directory=str(settings.FRONTEND_DIR / "css")), name="css")
 app.mount("/js", StaticFiles(directory=str(settings.FRONTEND_DIR / "js")), name="js")
