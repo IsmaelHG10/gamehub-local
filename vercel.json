@@ -1,5 +1,12 @@
 {
   "version": 2,
+  "git": {
+    "deploymentEnabled": {
+      "*": false,
+      "main": true,
+      "gamehub-state": false
+    }
+  },
   "builds": [
     {
       "src": "app.py",

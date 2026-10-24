@@ -171,7 +171,7 @@ async def push_state_now() -> bool:
                             _remote_sha = None
 
                     body: dict[str, str] = {
-                        "message": "chore(state): sync GameHub cloud state [skip ci]",
+                        "message": "chore(state): sync GameHub cloud state [skip ci] [vercel skip]",
                         "content": encoded,
                         "branch": branch,
                     }
