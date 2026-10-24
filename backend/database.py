@@ -92,6 +92,7 @@ CREATE TABLE IF NOT EXISTS calendar_events (
     poster_url TEXT,
     header_url TEXT,
     store_url TEXT,
+    summary TEXT DEFAULT '',
     updated_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_cal_date ON calendar_events(release_date);
@@ -108,6 +109,7 @@ CREATE TABLE IF NOT EXISTS calendar_favorites (
     poster_url TEXT,
     header_url TEXT,
     store_url TEXT,
+    summary TEXT DEFAULT '',
     saved_at REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS calendar_meta (
@@ -134,6 +136,10 @@ def init_db() -> None:
         conn = _connect_raw()
         try:
             conn.executescript(SCHEMA)
+            for tbl in ("calendar_events", "calendar_favorites"):
+                cols = {r[1] for r in conn.execute(f"PRAGMA table_info({tbl})").fetchall()}
+                if "summary" not in cols:
+                    conn.execute(f"ALTER TABLE {tbl} ADD COLUMN summary TEXT DEFAULT ''")
             conn.commit()
         finally:
             conn.close()

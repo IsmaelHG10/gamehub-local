@@ -245,12 +245,14 @@ async def api_bookmark_toggle(req: BookmarkRequest):
 @app.get("/api/calendar")
 async def api_calendar(
     mode: str = Query(default="hot", pattern="^(hot|classic|favorites)$"),
+    platform: str | None = Query(default=None, max_length=40),
     genre: str | None = Query(default=None),
     q: str | None = Query(default=None, max_length=120),
     force_refresh: bool = Query(default=False),
 ):
     return await release_calendar.get_calendar_data(
         mode=mode,
+        platform=platform or None,
         genre=genre or None,
         q=q or None,
         force_refresh=force_refresh,
@@ -270,10 +272,16 @@ async def api_calendar_favorites():
 
 @app.post("/api/calendar/favorites/toggle")
 async def api_calendar_favorite_toggle(req: CalendarFavoriteRequest):
-    if not req.item.get("appid"):
-        raise HTTPException(status_code=400, detail="Falta el identificador appid del juego")
+    if req.item.get("appid") is None and not req.item.get("title"):
+        raise HTTPException(status_code=400, detail="Falta el identificador o título del juego")
+    appid = (
+        int(req.item["appid"])
+        if req.item.get("appid") is not None
+        else release_calendar.synthetic_game_id(str(req.item["title"]))
+    )
+    req.item["appid"] = appid
     saved = release_calendar.toggle_favorite(req.item)
-    return {"favorited": saved, "appid": int(req.item["appid"])}
+    return {"favorited": saved, "appid": appid}
 
 
 @app.post("/api/calendar/track")
@@ -284,7 +292,7 @@ async def api_calendar_track(req: CalendarTrackRequest):
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Error consultando Steam: {exc}") from exc
+        raise HTTPException(status_code=502, detail=f"Error consultando catálogos de lanzamientos: {exc}") from exc
 
 
 # --------------------------------------------------------------------------- Gestión de Fuentes

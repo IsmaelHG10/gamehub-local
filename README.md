@@ -29,6 +29,16 @@ El motor autodetecta automáticamente el mejor conector disponible para cada web
 
 ---
 
+## 📅 Calendario de Lanzamientos Multi-Plataforma (Estilo Releases.com)
+
+En la pestaña **📅 Calendario** dispones de la agenda completa de próximos lanzamientos en **PC (Steam)**, **Nintendo Switch 2**, **PlayStation 5**, **Xbox Series X|S** y **Nintendo Switch**:
+
+- **Modos:** **🔥 Hot (Más Esperados)**, **📋 Clásico (Todos)** y **⭐ Siguiendo** (tus favoritos con avisos cuando salen).
+- **Vistas:** **📰 Agenda Diaria** (*Próximos 30 días* o *Todo 2026–2027+*), **🗓️ Cuadrícula Mensual** y **📆 Vista Semanal**.
+- **Filtros instantáneos:** Filtra en 1 clic por plataforma (`PC`, `Switch 2`, `PS5`, `Xbox Series`, `Switch`) y por género, o añade cualquier juego futuro por nombre (incluso exclusivos de consola como *GTA VI* o *The Duskbloods*).
+
+---
+
 ## 🧰 Dependencias y Descargas Rápidas
 
 - **🧲 Magnet (1 clic):** Abre directamente el enlace en qBittorrent o tu cliente Torrent predeterminado de Windows.

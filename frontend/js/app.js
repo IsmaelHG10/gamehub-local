@@ -18,17 +18,26 @@ const state = {
   depsConfig: { runtimes: [], tools: [], safety_rules: [] },
   depsInstalled: {},
   jdOnline: false,
-  // Estado del Calendario (estilo Releases.com)
+  // Estado del Calendario Multi-Plataforma (estilo Releases.com)
   calMode: "hot",          // 'hot' | 'classic' | 'favorites'
   calLayout: "agenda",     // 'agenda' | 'month' | 'week'
-  calUpcoming30: true,     // En Agenda: próximos 30 días dinámicos o mes concreto
+  calAgendaRange: "30d",   // '30d' | 'all' | 'month'
   calYear: new Date().getFullYear(),
   calMonth: new Date().getMonth(), // 0-11
   calWeekRef: new Date(),
+  calPlatform: "",
   calGenre: "",
   calInlineFilter: "",
   calSelectedDay: "",
-  calData: { items: [], alerts: [], available_genres: [], favorites_count: 0, today: "" },
+  calData: {
+    items: [],
+    alerts: [],
+    available_genres: [],
+    available_platforms: [],
+    platform_counts: {},
+    favorites_count: 0,
+    today: "",
+  },
   calLoaded: false,
 };
 
@@ -526,26 +535,63 @@ function formatDayHeading(isoDate, todayIso) {
   return base;
 }
 
+const PLATFORM_STYLE = {
+  "PC": { cls: "plat-pc", short: "PC", pillCls: "p-pc", icon: "💻" },
+  "Switch 2": { cls: "plat-ns2", short: "Switch 2", pillCls: "p-ns2", icon: "🔴" },
+  "PS5": { cls: "plat-ps5", short: "PS5", pillCls: "p-ps5", icon: "🔵" },
+  "Xbox Series": { cls: "plat-xsx", short: "XSX", pillCls: "p-xsx", icon: "🟢" },
+  "Switch": { cls: "plat-ns", short: "Switch", pillCls: "p-ns", icon: "🕹️" },
+  "PS4": { cls: "", short: "PS4", pillCls: "", icon: "🎮" },
+  "Xbox One": { cls: "", short: "XOne", pillCls: "", icon: "🎮" },
+  "Mac": { cls: "", short: "Mac", pillCls: "", icon: "🍎" },
+  "Linux": { cls: "", short: "Linux", pillCls: "", icon: "🐧" },
+};
+
+function renderPlatformBadges(platforms, maxCount = 4) {
+  const list = (platforms && platforms.length) ? platforms : ["PC"];
+  return list
+    .slice(0, maxCount)
+    .map((p) => {
+      const st = PLATFORM_STYLE[p] || { cls: "", short: p };
+      return `<span class="plat-badge ${st.cls}" title="${esc(p)}">${esc(st.short)}</span>`;
+    })
+    .join("");
+}
+
+function storeLabelForUrl(url, appid) {
+  const u = String(url || "").toLowerCase();
+  if (Number(appid) > 0 || u.includes("steampowered.com")) return "Ver en Steam";
+  if (u.includes("nintendo.")) return "Ver en Nintendo eShop";
+  if (u.includes("playstation.")) return "Ver en PlayStation";
+  if (u.includes("wikipedia.org")) return "Ver ficha informativa";
+  return "Ver ficha oficial";
+}
+
 function calItemToDrawerItem(c) {
+  const hasSteam = Number(c.appid) > 0;
+  const plats = (c.platforms && c.platforms.length) ? c.platforms : ["PC"];
   return {
     id: `cal-${c.appid}`,
-    raw_title: `${c.title} (${c.window_label || "Próximamente"})`,
+    raw_title: `${c.title} · ${plats.join(" / ")} (${c.window_label || "Próximamente"})`,
     clean_title: c.title,
-    source_id: "steam-calendar",
-    source_name: "Calendario Steam",
+    source_id: "multi-calendar",
+    source_name: `Calendario (${plats.slice(0, 3).join(" · ")})`,
     source_category: c.window_label || "Lanzamiento",
     published_at: c.precision === "day" ? `${c.release_date}T12:00:00Z` : null,
-    page_url: c.store_url,
+    page_url: "",
+    external_store_url: !hasSteam ? (c.store_url || "") : "",
     file_size: null,
     uris: [],
-    excerpt: "",
-    image_url: c.header_url,
+    excerpt: c.summary || "",
+    image_url: c.header_url || c.poster_url,
+    platforms: plats,
+    genres: c.genres || [],
     steam_info: {
-      appid: c.appid,
+      appid: hasSteam ? c.appid : null,
       official_name: c.title,
       poster_url: c.poster_url,
-      header_url: c.header_url,
-      store_url: c.store_url,
+      header_url: c.header_url || c.poster_url,
+      store_url: hasSteam ? c.store_url : "",
     },
   };
 }
@@ -581,6 +627,7 @@ function renderCalendarCard(c, todayIso) {
   const fallbacks = [c.header_url, svgPlaceholder(c.title)].filter(Boolean);
   const primary = c.poster_url || fallbacks[0];
   const cd = countdownMeta(c, todayIso);
+  const storeTitle = storeLabelForUrl(c.store_url, c.appid);
 
   const el = document.createElement("article");
   el.className = "game-card";
@@ -602,18 +649,20 @@ function renderCalendarCard(c, todayIso) {
       <div class="poster-overlay">
         <div class="quick-actions">
           <button class="btn btn-primary act-find" title="Buscar descargas en todas mis fuentes">🔍 Buscar</button>
-          <a class="btn btn-secondary act-steam" href="${esc(c.store_url)}" target="_blank" rel="noopener" title="Ver en Steam">↗</a>
+          ${c.store_url ? `<a class="btn btn-secondary act-steam" href="${esc(c.store_url)}" target="_blank" rel="noopener" title="${esc(storeTitle)}">↗</a>` : ""}
         </div>
       </div>
     </div>
     <div class="card-body">
       <div class="card-title" title="${esc(c.title)}">${esc(c.title)}</div>
+      <div class="plat-tags">
+        ${renderPlatformBadges(c.platforms, 4)}
+      </div>
       <div class="genre-mini-tags">
-        ${(c.genres || []).slice(0, 3).map((g) => `<span class="genre-mini">${esc(g)}</span>`).join("")}
+        ${(c.genres || []).slice(0, 2).map((g) => `<span class="genre-mini">${esc(g)}</span>`).join("")}
       </div>
       <div class="card-meta">
         <span>${esc(c.window_label || "Próximamente")}</span>
-        <span style="font-size:11px;color:var(--text-dim);">${esc((c.platforms || ["PC"]).join(" · "))}</span>
       </div>
     </div>
   `;
@@ -624,7 +673,7 @@ function renderCalendarCard(c, todayIso) {
     $("#global-search-input").value = c.title;
     runSearch(c.title);
   });
-  el.querySelector(".act-steam").addEventListener("click", (e) => e.stopPropagation());
+  el.querySelector(".act-steam")?.addEventListener("click", (e) => e.stopPropagation());
   el.addEventListener("click", () => openDetailDrawer(calItemToDrawerItem(c)));
   return el;
 }
@@ -632,7 +681,7 @@ function renderCalendarCard(c, todayIso) {
 async function loadCalendar(forceRefresh = false) {
   const container = $("#cal-container");
   if (!state.calLoaded || forceRefresh) {
-    container.innerHTML = `<div class="empty-state">Sincronizando calendario de lanzamientos desde Steam...</div>`;
+    container.innerHTML = `<div class="empty-state">Sincronizando calendario multi-plataforma (PC/Steam, Nintendo Switch 2, PS5)...</div>`;
   }
   try {
     const params = new URLSearchParams({ mode: state.calMode });
@@ -643,6 +692,7 @@ async function loadCalendar(forceRefresh = false) {
     $("#cal-fav-count").textContent = String(data.favorites_count || 0);
     $("#badge-calendar").textContent = String(data.favorites_count || 0);
     renderCalendarAlerts();
+    renderCalendarPlatforms();
     renderCalendarGenres();
     renderCalendar();
   } catch (err) {
@@ -670,10 +720,37 @@ function renderCalendarAlerts() {
   });
 }
 
+function renderCalendarPlatforms() {
+  const wrap = $("#cal-platform-pills");
+  if (!wrap) return;
+  const counts = state.calData.platform_counts || {};
+  const totalAll = (state.calData.items || []).length;
+  const mainPlats = ["", "PC", "Switch 2", "PS5", "Xbox Series", "Switch"];
+
+  wrap.innerHTML = "";
+  mainPlats.forEach((p) => {
+    if (p && !counts[p] && p !== "Switch 2" && p !== "PS5" && p !== "PC") return;
+    const st = PLATFORM_STYLE[p] || { icon: "🎮", pillCls: "" };
+    const cnt = p ? (counts[p] || 0) : totalAll;
+    const btn = document.createElement("button");
+    btn.className = `pill ${st.pillCls || ""} ${state.calPlatform === p ? "active" : ""}`.trim();
+    const labelText = p ? `${st.icon} ${p}` : "🎮 Todas las plataformas";
+    btn.innerHTML = `${esc(labelText)}<span class="plat-pill-count">(${cnt})</span>`;
+    btn.addEventListener("click", () => {
+      state.calPlatform = p;
+      // Al filtrar por consola específica en Agenda, ampliar horizonte si estaba solo en 30 días y hay pocos días cercanos
+      renderCalendarPlatforms();
+      renderCalendar();
+    });
+    wrap.appendChild(btn);
+  });
+}
+
 function renderCalendarGenres() {
   const preferred = [
     "", "Acción", "RPG", "Aventura", "Estrategia", "Terror", "Supervivencia",
-    "Shooter", "Simulación", "Roguelike", "Mundo Abierto", "Soulslike", "Indie", "Multijugador",
+    "Shooter", "Plataformas", "Lucha", "Carreras", "Deportes", "Puzles",
+    "Simulación", "Roguelike", "Mundo Abierto", "Soulslike", "Indie", "Multijugador",
   ];
   const available = new Set(state.calData.available_genres || []);
   const list = preferred.filter((g) => !g || available.has(g));
@@ -694,6 +771,9 @@ function renderCalendarGenres() {
 
 function filteredCalendarItems() {
   let items = state.calData.items || [];
+  if (state.calPlatform) {
+    items = items.filter((it) => (it.platforms || []).includes(state.calPlatform));
+  }
   if (state.calGenre) {
     items = items.filter((it) => (it.genres || []).includes(state.calGenre));
   }
@@ -706,8 +786,12 @@ function filteredCalendarItems() {
 
 function updateCalendarNavLabels() {
   const upBtn = $("#btn-cal-upcoming30");
-  upBtn.classList.toggle("hidden", state.calLayout !== "agenda" || state.calMode === "favorites");
-  upBtn.classList.toggle("active", state.calUpcoming30 && state.calLayout === "agenda");
+  const allBtn = $("#btn-cal-allupcoming");
+  const showAgendaRanges = state.calLayout === "agenda" && state.calMode !== "favorites";
+  upBtn.classList.toggle("hidden", !showAgendaRanges);
+  allBtn?.classList.toggle("hidden", !showAgendaRanges);
+  upBtn.classList.toggle("active", showAgendaRanges && state.calAgendaRange === "30d");
+  allBtn?.classList.toggle("active", showAgendaRanges && state.calAgendaRange === "all");
 
   const label = $("#cal-period-label");
   if (state.calMode === "favorites" && state.calLayout === "agenda") {
@@ -716,8 +800,10 @@ function updateCalendarNavLabels() {
     const mon = mondayOfWeek(state.calWeekRef);
     const sun = addDays(mon, 6);
     label.textContent = `${mon.getDate()} ${MONTHS_ES[mon.getMonth()].slice(0, 3)} – ${sun.getDate()} ${MONTHS_ES[sun.getMonth()].slice(0, 3)} ${sun.getFullYear()}`;
-  } else if (state.calLayout === "agenda" && state.calUpcoming30) {
+  } else if (state.calLayout === "agenda" && state.calAgendaRange === "30d") {
     label.textContent = "Próximos 30 días";
+  } else if (state.calLayout === "agenda" && state.calAgendaRange === "all") {
+    label.textContent = "Horizonte 2026–2027+";
   } else {
     label.textContent = `${MONTHS_ES[state.calMonth]} ${state.calYear}`;
   }
@@ -744,11 +830,17 @@ function renderCalendarAgenda(items, todayIso) {
 
   let scoped = items;
   if (state.calMode !== "favorites" && !state.calInlineFilter.trim()) {
-    if (state.calUpcoming30) {
+    if (state.calAgendaRange === "30d") {
       const endIso = toIsoLocal(addDays(new Date(), 35));
       scoped = items.filter(
         (it) =>
           (it.precision === "day" && it.release_date >= todayIso && it.release_date <= endIso) ||
+          (it.precision !== "day" && (it.release_date || "").slice(0, 7) >= todayIso.slice(0, 7))
+      );
+    } else if (state.calAgendaRange === "all") {
+      scoped = items.filter(
+        (it) =>
+          (it.precision === "day" && it.release_date >= todayIso) ||
           (it.precision !== "day" && (it.release_date || "").slice(0, 7) >= todayIso.slice(0, 7))
       );
     } else {
@@ -766,7 +858,7 @@ function renderCalendarAgenda(items, todayIso) {
         <p>
           ${state.calMode === "favorites"
             ? "Marca cualquier juego con ★ en las pestañas Hot o Clásico (o añádelo arriba por nombre) para seguir su cuenta atrás."
-            : "Prueba cambiando al modo 📋 Clásico (Todos), navegando a otro mes con ◀ ▶ o quitando el filtro de género."}
+            : "Prueba pulsando 🔭 Todo 2026–2027+, cambiando al modo 📋 Clásico (Todos) o quitando algún filtro."}
         </p>
       </div>`;
     return;
@@ -804,19 +896,47 @@ function renderCalendarAgenda(items, todayIso) {
     container.appendChild(block);
   });
 
-  // Ventanas estimadas (ej. Noviembre 2026, T1 2027, Próximamente)
-  Array.from(windows.entries()).slice(0, 6).forEach(([wLabel, wItems]) => {
+  // Si estamos en 30d pero hay más lanzamientos fechados más adelante (ej. 2027 en Switch 2 / PS5), ofrecer atajo 1 clic
+  if (state.calMode !== "favorites" && state.calAgendaRange === "30d") {
+    const endIso = toIsoLocal(addDays(new Date(), 35));
+    const laterDatedCount = items.filter((it) => it.precision === "day" && it.release_date > endIso).length;
+    if (laterDatedCount > 0) {
+      const moreBanner = document.createElement("div");
+      moreBanner.className = "panel-box";
+      moreBanner.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:24px;";
+      moreBanner.innerHTML = `
+        <span style="font-size:13.5px;color:var(--text-muted);">
+          🔭 Hay <strong>${laterDatedCount}</strong> lanzamiento(s) más con día exacto confirmado más allá de 30 días${state.calPlatform ? ` en <strong>${esc(state.calPlatform)}</strong>` : ""}.
+        </span>
+        <button class="btn btn-secondary btn-sm" id="btn-expand-horizon">Ver calendario completo 2026–2027+ →</button>
+      `;
+      moreBanner.querySelector("#btn-expand-horizon").addEventListener("click", () => {
+        state.calAgendaRange = "all";
+        renderCalendar();
+      });
+      container.appendChild(moreBanner);
+    }
+  }
+
+  // Ventanas estimadas (ej. Noviembre 2026, 2026, T1 2027, 2027, Próximamente)
+  Array.from(windows.entries()).slice(0, 14).forEach(([wLabel, wItems]) => {
     const block = document.createElement("div");
     block.className = "cal-day-block";
+    const initialSlice = 24;
     block.innerHTML = `
       <div class="cal-day-header">
         <div class="cal-day-title">📆 Ventana estimada · ${esc(wLabel)}</div>
         <span class="badge">${wItems.length} juego${wItems.length === 1 ? "" : "s"}</span>
       </div>
       <div class="poster-grid"></div>
+      ${wItems.length > initialSlice ? `<div style="text-align:center;margin-top:12px;"><button class="btn btn-secondary btn-sm btn-more-win">Mostrar los ${wItems.length - initialSlice} restantes de ${esc(wLabel)}</button></div>` : ""}
     `;
     const grid = block.querySelector(".poster-grid");
-    wItems.slice(0, 18).forEach((c) => grid.appendChild(renderCalendarCard(c, todayIso)));
+    wItems.slice(0, initialSlice).forEach((c) => grid.appendChild(renderCalendarCard(c, todayIso)));
+    block.querySelector(".btn-more-win")?.addEventListener("click", (e) => {
+      wItems.slice(initialSlice).forEach((c) => grid.appendChild(renderCalendarCard(c, todayIso)));
+      e.currentTarget.parentElement.remove();
+    });
     container.appendChild(block);
   });
 }
@@ -967,7 +1087,7 @@ function renderCalendarWeek(items, todayIso) {
           <img src="${esc(c.poster_url)}" data-fallbacks="${esc(c.header_url)}||${esc(svgPlaceholder(c.title))}" onerror="window.__imgFallback(this)" loading="lazy" alt="${esc(c.title)}" />
           <div style="min-width:0;flex:1;">
             <div style="font-size:12.5px;font-weight:700;line-height:1.25;word-break:break-word;">${esc(c.title)}</div>
-            <div style="font-size:10.5px;color:var(--text-dim);margin-top:2px;">${esc((c.genres || []).slice(0, 2).join(" · "))}</div>
+            <div class="plat-tags" style="margin-top:3px;">${renderPlatformBadges(c.platforms, 3)}</div>
           </div>
           <button class="bookmark-btn ${c.favorited ? "saved" : ""}" style="width:26px;height:26px;flex-shrink:0;" title="Seguir">
             ${c.favorited ? "★" : "☆"}
@@ -1026,9 +1146,11 @@ async function openDetailDrawer(item) {
   $("#drawer-badges").innerHTML = `
     <span class="badge">${esc(item.source_name)}</span>
     <span class="badge">${esc(item.source_category)}</span>
+    ${item.platforms?.length ? renderPlatformBadges(item.platforms, 6) : ""}
     ${item.file_size ? `<span class="size-tag">${esc(item.file_size)}</span>` : ""}
   `;
 
+  const extStoreLabel = item.external_store_url ? storeLabelForUrl(item.external_store_url, null) : "";
   const body = $("#drawer-body");
   body.innerHTML = `
     <div style="display:flex;gap:9px;flex-wrap:wrap;">
@@ -1038,10 +1160,19 @@ async function openDetailDrawer(item) {
       ${item.page_url ? `<a class="btn btn-secondary" href="${esc(item.page_url)}" target="_blank" rel="noopener">🌐 Abrir Página Fuente ↗</a>` : ""}
       <button class="btn btn-primary" id="d-search-hub">🔍 Buscar en mis fuentes</button>
       ${item.steam_info?.store_url ? `<a class="btn btn-secondary" href="${esc(item.steam_info.store_url)}" target="_blank" rel="noopener">🛒 Ver en Steam ↗</a>` : ""}
+      ${item.external_store_url ? `<a class="btn btn-secondary" href="${esc(item.external_store_url)}" target="_blank" rel="noopener">🎮 ${esc(extStoreLabel)} ↗</a>` : ""}
     </div>
+    ${item.genres?.length && !item.steam_info?.appid ? `
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        ${item.genres.map((g) => `<span class="pill" style="padding:3px 10px;font-size:11.5px;">${esc(g)}</span>`).join("")}
+      </div>` : ""}
     ${item.excerpt ? `<div class="req-box">${esc(item.excerpt)}</div>` : ""}
     <div id="drawer-steam-extra" style="color:var(--text-muted);font-size:13px;">
-      ${item.steam_info?.appid ? "Cargando sinopsis, capturas y requisitos desde Steam..." : "No se encontró ficha vinculada en Steam para este título."}
+      ${item.steam_info?.appid
+        ? "Cargando sinopsis, capturas y requisitos desde Steam..."
+        : (item.source_id === "multi-calendar"
+            ? ""
+            : "No se encontró ficha vinculada en Steam para este título.")}
     </div>
   `;
 
@@ -1389,7 +1520,12 @@ function bindEvents() {
   );
 
   $("#btn-cal-upcoming30").addEventListener("click", () => {
-    state.calUpcoming30 = true;
+    state.calAgendaRange = "30d";
+    renderCalendar();
+  });
+
+  $("#btn-cal-allupcoming")?.addEventListener("click", () => {
+    state.calAgendaRange = "all";
     renderCalendar();
   });
 
@@ -1397,7 +1533,7 @@ function bindEvents() {
     if (state.calLayout === "week") {
       state.calWeekRef = addDays(state.calWeekRef, -7);
     } else {
-      state.calUpcoming30 = false;
+      state.calAgendaRange = "month";
       state.calMonth -= 1;
       if (state.calMonth < 0) {
         state.calMonth = 11;
@@ -1411,7 +1547,7 @@ function bindEvents() {
     if (state.calLayout === "week") {
       state.calWeekRef = addDays(state.calWeekRef, 7);
     } else {
-      state.calUpcoming30 = false;
+      state.calAgendaRange = "month";
       state.calMonth += 1;
       if (state.calMonth > 11) {
         state.calMonth = 0;
@@ -1426,7 +1562,7 @@ function bindEvents() {
     state.calYear = now.getFullYear();
     state.calMonth = now.getMonth();
     state.calWeekRef = now;
-    if (state.calLayout === "agenda") state.calUpcoming30 = true;
+    if (state.calLayout === "agenda") state.calAgendaRange = "30d";
     renderCalendar();
   });
 
@@ -1441,7 +1577,7 @@ function bindEvents() {
     btn.textContent = "⏳ Actualizando...";
     try {
       await loadCalendar(true);
-      toast("📅 Calendario actualizado con los últimos lanzamientos de Steam");
+      toast("📅 Calendario multi-plataforma actualizado (PC, Switch 2, PS5 y global)");
     } finally {
       btn.disabled = false;
       btn.textContent = "🔄 Actualizar";
@@ -1461,7 +1597,8 @@ function bindEvents() {
         method: "POST",
         body: { query: q, favorite: true },
       });
-      toast(`★ Añadido «${res.item.title}» (${res.item.window_label}) a tus seguidos`);
+      const plats = (res.item.platforms || ["PC"]).join(" · ");
+      toast(`★ Siguiendo «${res.item.title}» [${plats}] (${res.item.window_label})`);
       input.value = "";
       await loadCalendar(false);
     } catch (err) {

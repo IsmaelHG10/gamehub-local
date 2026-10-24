@@ -377,3 +377,154 @@ def test_release_calendar_parsing_and_favorites(isolated_env: Path, monkeypatch:
         assert r_only_favs.json()["total"] == 1
         assert r_only_favs.json()["favorites_count"] == 1
 
+
+# --------------------------------------------------------------------------- 6. Calendario Multi-Plataforma (Nintendo Switch 2, PS5 y Fusión)
+
+def test_multiplatform_calendar_switch2_ps5_and_merge(isolated_env: Path):
+    from backend.main import app
+    from backend.services import release_calendar
+
+    # Fechas europeas Nintendo eShop y tablas Wikipedia
+    assert release_calendar.parse_steam_date("07-04-2027") == ("2027-04-07", "day", "7 Abril 2027")
+    assert release_calendar.parse_steam_date("2050-12-31")[1] == "tba"
+    assert release_calendar.parse_steam_date("October 29 [ 12 ]", default_year=2026) == (
+        "2026-10-29",
+        "day",
+        "29 Octubre 2026",
+    )
+    assert release_calendar.parse_steam_date("Q4", default_year=2026) == ("2026-12-99", "quarter", "T4 2026")
+
+    # 1) Nintendo Switch 2 Solr docs (ej. exclusivo Switch 2 + multi-plataforma)
+    ns2_docs = [
+        {
+            "title": "The Duskbloods",
+            "system_names_txt": ["Nintendo Switch 2"],
+            "system_type": ["nintendoswitch2"],
+            "dates_released_dts": ["2026-12-31T00:00:00Z"],
+            "pretty_date_s": "2026",
+            "pretty_game_categories_txt": ["Acción", "Rol (RPG)"],
+            "publisher": "FromSoftware",
+            "image_url_sq_s": "https://www.nintendo.com/eu/duskbloods_sq.jpg",
+            "image_url_h2x1_s": "https://www.nintendo.com/eu/duskbloods_banner.jpg",
+            "url": "/es-es/Juegos/Juegos-de-Nintendo-Switch-2/The-Duskbloods.html",
+            "excerpt": "Acción multijugador gótica exclusiva de Nintendo Switch 2.",
+        },
+        {
+            "title": "007 First Light - Edición Deluxe",
+            "system_names_txt": ["Nintendo Switch 2"],
+            "system_type": ["nintendoswitch2"],
+            "dates_released_dts": ["2027-03-18T00:00:00Z"],
+            "pretty_date_s": "18-03-2027",
+            "pretty_game_categories_txt": ["Acción", "Aventura"],
+            "publisher": "IO Interactive",
+            "image_url_sq_s": "https://www.nintendo.com/eu/007_sq.jpg",
+            "url": "/es-es/Juegos/Juegos-de-Nintendo-Switch-2/007-First-Light.html",
+        },
+    ]
+    ns2_items = release_calendar.parse_nintendo_solr_docs(ns2_docs, cutoff_iso="2026-09-01")
+    assert len(ns2_items) == 2
+    assert ns2_items[0]["appid"] < 0
+    assert "Switch 2" in ns2_items[0]["platforms"]
+
+    # 2) PlayStation 5 HTML (mosaico con packshot + bloque con alias ES/EN)
+    ps5_html = """
+    <section>
+      <h2>Más juegos para PS5 disponibles próximamente*</h2>
+      <a class="game-grid-v2-tile" href="/es-es/games/intergalactic-the-heretic-prophet/">
+        <img src="https://gmedia.playstation.com/is/image/SIEPDC/intergalactic.jpg" />
+        <p>Intergalactic: The Heretic Prophet</p>
+      </a>
+    </section>
+    <section>
+      <h2>Reserva y añade a la lista de deseos los próximos lanzamientos para PS5*</h2>
+      <div class="box">
+        <h3>Grand Theft Auto VI</h3>
+        <p>Regresa a Vice City en PlayStation 5.</p>
+        <a href="/es-es/games/grand-theft-auto-vi/">Reserva ya</a>
+      </div>
+    </section>
+    """
+    ps5_items = release_calendar.parse_playstation_upcoming_html(ps5_html)
+    assert len(ps5_items) == 2
+    assert all("PS5" in it["platforms"] for it in ps5_items)
+
+    # 3) Wikipedia tabla con rowspan + multi-plataforma (WIN, NS2, PS5, XBX/S)
+    wiki_html = """
+    <table class="wikitable">
+      <tr><th>Release date</th><th>Title</th><th>Platform(s)</th><th>Type(s)</th><th>Genre(s)</th><th>Developer(s)</th><th>Publisher(s)</th></tr>
+      <tr>
+        <td rowspan="2">March 18</td>
+        <td><i><a href="/wiki/007_First_Light">007 First Light</a></i></td>
+        <td>WIN, NS2, PS5, XBX/S</td>
+        <td>Original</td>
+        <td>Action-adventure</td>
+        <td>IO Interactive</td>
+        <td>IO Interactive</td>
+      </tr>
+      <tr>
+        <td><i><a href="/wiki/Ghost_of_Yotei">Ghost of Yōtei</a></i></td>
+        <td>PS5</td>
+        <td>Original</td>
+        <td>Action-adventure</td>
+        <td>Sucker Punch</td>
+        <td>Sony Interactive Entertainment</td>
+      </tr>
+    </table>
+    """
+    wiki_items = release_calendar.parse_wikipedia_release_html(wiki_html, year=2027, cutoff_iso="2026-09-01")
+    assert len(wiki_items) == 2
+    assert wiki_items[1]["release_date"] == "2027-03-18"
+    assert wiki_items[1]["platforms"] == ["PS5"]
+
+    # 4) Fusión con versión de Steam de 007 First Light (conserva AppID positivo de Steam + une PC/Switch 2/PS5/Xbox Series + fecha exacta)
+    steam_007 = {
+        "appid": 2999007,
+        "title": "007 First Light",
+        "release_date": "9999-12-31",
+        "precision": "tba",
+        "window_label": "Próximamente",
+        "is_hot": 1,
+        "genres": ["Acción"],
+        "platforms": ["PC"],
+        "poster_url": "https://cdn.cloudflare.steamstatic.com/steam/apps/2999007/library_600x900.jpg",
+        "header_url": "https://cdn.cloudflare.steamstatic.com/steam/apps/2999007/header.jpg",
+        "store_url": "https://store.steampowered.com/app/2999007/",
+        "summary": "",
+    }
+    release_calendar._save_calendar_events([steam_007, *ns2_items, *ps5_items, *wiki_items])
+
+    with TestClient(app) as client:
+        r_all = client.get("/api/calendar?mode=hot")
+        assert r_all.status_code == 200
+        body = r_all.json()
+        assert "Switch 2" in body["available_platforms"]
+        assert "PS5" in body["available_platforms"]
+
+        by_title = {it["title"]: it for it in body["items"]}
+        merged_007 = by_title["007 First Light"]
+        assert merged_007["appid"] == 2999007
+        assert merged_007["release_date"] == "2027-03-18"
+        assert set(merged_007["platforms"]) >= {"PC", "Switch 2", "PS5", "Xbox Series"}
+
+        # Filtrar exclusivamente Nintendo Switch 2 y PS5
+        r_ns2 = client.get("/api/calendar?mode=hot&platform=Switch+2")
+        assert r_ns2.status_code == 200
+        ns2_titles = {it["title"] for it in r_ns2.json()["items"]}
+        assert "The Duskbloods" in ns2_titles and "007 First Light" in ns2_titles
+        assert "Ghost of Yōtei" not in ns2_titles
+
+        r_ps5 = client.get("/api/calendar?mode=hot&platform=PS5")
+        assert r_ps5.status_code == 200
+        ps5_titles = {it["title"] for it in r_ps5.json()["items"]}
+        assert {"Intergalactic: The Heretic Prophet", "Grand Theft Auto VI", "Ghost of Yōtei"} <= ps5_titles
+
+        # Guardar un exclusivo de Nintendo Switch 2 (ID negativo sin Steam) en Favoritos
+        duskbloods = next(it for it in r_ns2.json()["items"] if it["title"] == "The Duskbloods")
+        assert duskbloods["appid"] < 0
+        r_fav = client.post("/api/calendar/favorites/toggle", json={"item": duskbloods})
+        assert r_fav.status_code == 200 and r_fav.json()["favorited"] is True
+
+        favs = client.get("/api/calendar/favorites").json()["items"]
+        assert any(f["title"] == "The Duskbloods" and "Switch 2" in f["platforms"] for f in favs)
+
+

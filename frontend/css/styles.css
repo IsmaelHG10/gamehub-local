@@ -1071,6 +1071,76 @@ button { cursor: pointer; border: none; background: none; }
   color: var(--text-muted);
 }
 
+/* Badges de Plataforma (PC, Nintendo Switch 2, PS5, Xbox Series, Switch) */
+.plat-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 3px;
+}
+
+.plat-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 4px;
+  letter-spacing: 0.02em;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  background: rgba(15, 23, 42, 0.85);
+  color: #cbd5e1;
+  white-space: nowrap;
+}
+
+.plat-badge.plat-pc {
+  background: rgba(56, 189, 248, 0.14);
+  border-color: rgba(56, 189, 248, 0.42);
+  color: #7dd3fc;
+}
+
+.plat-badge.plat-ns2 {
+  background: rgba(239, 68, 68, 0.18);
+  border-color: rgba(248, 113, 113, 0.52);
+  color: #fca5a5;
+}
+
+.plat-badge.plat-ps5 {
+  background: rgba(59, 130, 246, 0.2);
+  border-color: rgba(96, 165, 250, 0.52);
+  color: #93c5fd;
+}
+
+.plat-badge.plat-xsx {
+  background: rgba(34, 197, 94, 0.16);
+  border-color: rgba(74, 222, 128, 0.45);
+  color: #86efac;
+}
+
+.plat-badge.plat-ns {
+  background: rgba(244, 63, 94, 0.13);
+  border-color: rgba(251, 113, 133, 0.35);
+  color: #fda4af;
+}
+
+.plat-pill-count {
+  font-size: 11px;
+  opacity: 0.72;
+  margin-left: 4px;
+  font-weight: 600;
+}
+
+.cal-platform-bar .pill.active.p-ns2 {
+  background: rgba(239, 68, 68, 0.24);
+  border-color: #f87171;
+}
+.cal-platform-bar .pill.active.p-ps5 {
+  background: rgba(59, 130, 246, 0.26);
+  border-color: #60a5fa;
+}
+.cal-platform-bar .pill.active.p-xsx {
+  background: rgba(34, 197, 94, 0.22);
+  border-color: #4ade80;
+}
+
 /* Cuadrícula Mensual y Semanal */
 .cal-weekdays {
   display: grid;
