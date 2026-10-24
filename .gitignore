@@ -9,10 +9,12 @@ __pycache__/
 *$py.class
 .pytest_cache/
 
-# Base de datos local SQLite y temporales
+# Base de datos local SQLite, secretos y temporales
+.env
 data/*.db
 data/*.db-wal
 data/*.db-shm
+data/.secret_key
 config/*.tmp
 
 # Sistema operativo / IDE

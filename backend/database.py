@@ -116,6 +116,40 @@ CREATE TABLE IF NOT EXISTS calendar_meta (
     key TEXT PRIMARY KEY,
     value REAL NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL UNIQUE,
+    display_name TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    is_admin INTEGER NOT NULL DEFAULT 0,
+    created_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS user_bookmarks (
+    user_id INTEGER NOT NULL,
+    item_id TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    saved_at REAL NOT NULL,
+    PRIMARY KEY (user_id, item_id)
+);
+
+CREATE TABLE IF NOT EXISTS user_calendar_favorites (
+    user_id INTEGER NOT NULL,
+    appid INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    release_date TEXT,
+    precision TEXT NOT NULL DEFAULT 'tba',
+    window_label TEXT,
+    genres TEXT NOT NULL DEFAULT '[]',
+    platforms TEXT NOT NULL DEFAULT '[]',
+    poster_url TEXT,
+    header_url TEXT,
+    store_url TEXT,
+    summary TEXT DEFAULT '',
+    saved_at REAL NOT NULL,
+    PRIMARY KEY (user_id, appid)
+);
 """
 
 
@@ -380,13 +414,148 @@ def steam_details_set(appid: int, data: dict, ttl_seconds: float) -> None:
         )
 
 
+# --------------------------------------------------------------------------- usuarios / multi-cuenta
+
+def count_users() -> int:
+    with connect() as conn:
+        return int(conn.execute("SELECT COUNT(*) FROM users").fetchone()[0])
+
+
+def get_user_by_username(username: str) -> dict | None:
+    norm = (username or "").strip().lower()
+    if not norm:
+        return None
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM users WHERE username=?", (norm,)).fetchone()
+    return dict(row) if row else None
+
+
+def get_user_by_id(user_id: int) -> dict | None:
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM users WHERE id=?", (int(user_id),)).fetchone()
+    return dict(row) if row else None
+
+
+def create_user(username: str, display_name: str, password_hash: str, is_admin: bool = False) -> dict:
+    norm = username.strip().lower()
+    disp = (display_name or username).strip()[:40]
+    now = time.time()
+    with connect() as conn:
+        cur = conn.execute(
+            "INSERT INTO users(username, display_name, password_hash, is_admin, created_at) VALUES (?,?,?,?,?)",
+            (norm, disp, password_hash, 1 if is_admin else 0, now),
+        )
+        uid = int(cur.lastrowid)
+        # Si es la primera cuenta creada y había favoritos locales previos sin cuenta, heredarlos automáticamente
+        if uid == 1:
+            conn.execute(
+                """INSERT OR IGNORE INTO user_bookmarks(user_id, item_id, payload, saved_at)
+                   SELECT ?, item_id, payload, saved_at FROM bookmarks""",
+                (uid,),
+            )
+            conn.execute(
+                """INSERT OR IGNORE INTO user_calendar_favorites(
+                       user_id, appid, title, release_date, precision, window_label,
+                       genres, platforms, poster_url, header_url, store_url, summary, saved_at
+                   )
+                   SELECT ?, appid, title, release_date, precision, window_label,
+                          genres, platforms, poster_url, header_url, store_url, summary, saved_at
+                   FROM calendar_favorites""",
+                (uid,),
+            )
+    return {
+        "id": uid,
+        "username": norm,
+        "display_name": disp,
+        "is_admin": bool(is_admin),
+        "created_at": now,
+    }
+
+
+def export_persistent_state() -> dict:
+    """Exporta usuarios, guardados y favoritos de calendario por cuenta para persistencia cloud."""
+    with connect() as conn:
+        users = [dict(r) for r in conn.execute("SELECT * FROM users ORDER BY id ASC").fetchall()]
+        ubm = [dict(r) for r in conn.execute("SELECT * FROM user_bookmarks ORDER BY saved_at ASC").fetchall()]
+        ucal = [dict(r) for r in conn.execute("SELECT * FROM user_calendar_favorites ORDER BY saved_at ASC").fetchall()]
+    return {
+        "users": users,
+        "user_bookmarks": ubm,
+        "user_calendar_favorites": ucal,
+    }
+
+
+def import_persistent_state(state: dict) -> None:
+    """Restaura usuarios y sus favoritos desde una instantánea persistente cloud."""
+    if not isinstance(state, dict):
+        return
+    users = state.get("users") or []
+    ubm = state.get("user_bookmarks") or []
+    ucal = state.get("user_calendar_favorites") or []
+    with connect() as conn:
+        for u in users:
+            conn.execute(
+                """INSERT INTO users(id, username, display_name, password_hash, is_admin, created_at)
+                   VALUES (?,?,?,?,?,?)
+                   ON CONFLICT(id) DO UPDATE SET
+                       username=excluded.username,
+                       display_name=excluded.display_name,
+                       password_hash=excluded.password_hash,
+                       is_admin=excluded.is_admin""",
+                (
+                    int(u["id"]),
+                    str(u["username"]).lower(),
+                    str(u.get("display_name") or u["username"]),
+                    str(u["password_hash"]),
+                    int(u.get("is_admin", 0)),
+                    float(u.get("created_at") or time.time()),
+                ),
+            )
+        if users:
+            conn.execute("DELETE FROM user_bookmarks")
+            for b in ubm:
+                conn.execute(
+                    "INSERT OR REPLACE INTO user_bookmarks(user_id, item_id, payload, saved_at) VALUES (?,?,?,?)",
+                    (int(b["user_id"]), str(b["item_id"]), str(b["payload"]), float(b.get("saved_at") or time.time())),
+                )
+            conn.execute("DELETE FROM user_calendar_favorites")
+            for c in ucal:
+                conn.execute(
+                    """INSERT OR REPLACE INTO user_calendar_favorites(
+                           user_id, appid, title, release_date, precision, window_label,
+                           genres, platforms, poster_url, header_url, store_url, summary, saved_at
+                       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        int(c["user_id"]),
+                        int(c["appid"]),
+                        str(c.get("title") or ""),
+                        c.get("release_date") or "9999-12-31",
+                        c.get("precision") or "tba",
+                        c.get("window_label") or "Próximamente",
+                        str(c.get("genres") or "[]"),
+                        str(c.get("platforms") or '["PC"]'),
+                        str(c.get("poster_url") or ""),
+                        str(c.get("header_url") or ""),
+                        str(c.get("store_url") or ""),
+                        str(c.get("summary") or ""),
+                        float(c.get("saved_at") or time.time()),
+                    ),
+                )
+
+
 # --------------------------------------------------------------------------- bookmarks / stats
 
-def bookmark_list() -> list[dict]:
+def bookmark_list(user_id: int | None = None) -> list[dict]:
     with connect() as conn:
-        rows = conn.execute(
-            "SELECT item_id, payload, saved_at FROM bookmarks ORDER BY saved_at DESC"
-        ).fetchall()
+        if user_id and user_id > 0:
+            rows = conn.execute(
+                "SELECT item_id, payload, saved_at FROM user_bookmarks WHERE user_id=? ORDER BY saved_at DESC",
+                (int(user_id),),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT item_id, payload, saved_at FROM bookmarks ORDER BY saved_at DESC"
+            ).fetchall()
     out: list[dict] = []
     for r in rows:
         try:
@@ -399,16 +568,34 @@ def bookmark_list() -> list[dict]:
     return out
 
 
-def bookmark_ids() -> set[str]:
+def bookmark_ids(user_id: int | None = None) -> set[str]:
     with connect() as conn:
-        rows = conn.execute("SELECT item_id FROM bookmarks").fetchall()
+        if user_id and user_id > 0:
+            rows = conn.execute("SELECT item_id FROM user_bookmarks WHERE user_id=?", (int(user_id),)).fetchall()
+        else:
+            rows = conn.execute("SELECT item_id FROM bookmarks").fetchall()
     return {r[0] for r in rows}
 
 
-def bookmark_toggle(item: dict) -> bool:
-    """Alterna un juego en Guardados. Devuelve True si queda guardado, False si se eliminó."""
+def bookmark_toggle(item: dict, user_id: int | None = None) -> bool:
+    """Alterna un juego en Guardados (por usuario si inició sesión). Devuelve True si queda guardado."""
     item_id = item["id"]
     with connect() as conn:
+        if user_id and user_id > 0:
+            uid = int(user_id)
+            exists = conn.execute(
+                "SELECT 1 FROM user_bookmarks WHERE user_id=? AND item_id=?",
+                (uid, item_id),
+            ).fetchone()
+            if exists:
+                conn.execute("DELETE FROM user_bookmarks WHERE user_id=? AND item_id=?", (uid, item_id))
+                return False
+            conn.execute(
+                "INSERT INTO user_bookmarks(user_id, item_id, payload, saved_at) VALUES (?,?,?,?)",
+                (uid, item_id, json.dumps(item, ensure_ascii=False), time.time()),
+            )
+            return True
+
         exists = conn.execute("SELECT 1 FROM bookmarks WHERE item_id=?", (item_id,)).fetchone()
         if exists:
             conn.execute("DELETE FROM bookmarks WHERE item_id=?", (item_id,))
@@ -420,12 +607,21 @@ def bookmark_toggle(item: dict) -> bool:
         return True
 
 
-def db_stats() -> dict:
+def db_stats(user_id: int | None = None) -> dict:
     with connect() as conn:
         total_releases = conn.execute("SELECT COUNT(*) FROM releases").fetchone()[0]
         total_steam = conn.execute("SELECT COUNT(*) FROM steam_cache WHERE data IS NOT NULL").fetchone()[0]
-        total_bookmarks = conn.execute("SELECT COUNT(*) FROM bookmarks").fetchone()[0]
-        total_cal_favs = conn.execute("SELECT COUNT(*) FROM calendar_favorites").fetchone()[0]
+        if user_id and user_id > 0:
+            uid = int(user_id)
+            total_bookmarks = conn.execute(
+                "SELECT COUNT(*) FROM user_bookmarks WHERE user_id=?", (uid,)
+            ).fetchone()[0]
+            total_cal_favs = conn.execute(
+                "SELECT COUNT(*) FROM user_calendar_favorites WHERE user_id=?", (uid,)
+            ).fetchone()[0]
+        else:
+            total_bookmarks = conn.execute("SELECT COUNT(*) FROM bookmarks").fetchone()[0]
+            total_cal_favs = conn.execute("SELECT COUNT(*) FROM calendar_favorites").fetchone()[0]
     return {
         "total_releases": total_releases,
         "cached_steam_covers": total_steam,

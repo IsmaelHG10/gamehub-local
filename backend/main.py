@@ -1,4 +1,4 @@
-"""Servidor principal FastAPI de GameHub Local."""
+"""Servidor principal FastAPI de GameHub (Modo Escritorio Local + Modo Web Cloud Multi-Usuario)."""
 from __future__ import annotations
 
 import asyncio
@@ -7,7 +7,7 @@ import sys
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -15,7 +15,15 @@ from pydantic import BaseModel, Field
 from . import database, settings
 from .adapters.autodetect import autodetect_url
 from .adapters.base import new_client
-from .services import downloader, release_calendar, source_manager, steam_enricher, winget_manager
+from .services import (
+    auth,
+    cloud_sync,
+    downloader,
+    release_calendar,
+    source_manager,
+    steam_enricher,
+    winget_manager,
+)
 
 
 async def _periodic_sync_loop() -> None:
@@ -42,6 +50,7 @@ async def _periodic_sync_loop() -> None:
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     database.init_db()
+    await cloud_sync.pull_state_on_startup()
     sync_task: asyncio.Task | None = None
     if settings.AUTO_SYNC:
         sync_task = asyncio.create_task(_periodic_sync_loop())
@@ -53,14 +62,26 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(
-    title="GameHub Local",
-    version="1.0.0",
+    title="GameHub",
+    version="2.0.0",
     docs_url="/api/docs",
     lifespan=lifespan,
 )
 
 
 # --------------------------------------------------------------------------- Modelos Pydantic
+
+class RegisterRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=30)
+    password: str = Field(min_length=6, max_length=128)
+    display_name: str = Field(default="", max_length=40)
+    invite_code: str = Field(default="", max_length=80)
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
 
 class SourcePayload(BaseModel):
     id: str | None = None
@@ -119,24 +140,103 @@ class CalendarTrackRequest(BaseModel):
     favorite: bool = True
 
 
+def _set_auth_cookie(response: Response, token: str) -> None:
+    response.set_cookie(
+        key=auth.COOKIE_NAME,
+        value=token,
+        max_age=auth.SESSION_TTL_SECONDS,
+        httponly=True,
+        samesite="lax",
+        secure=settings.IS_WEB_MODE,
+        path="/",
+    )
+
+
+def _uid(user: dict | None) -> int | None:
+    return int(user["id"]) if user and user.get("id") else None
+
+
+# --------------------------------------------------------------------------- Autenticación y Cuentas
+
+@app.get("/api/auth/status")
+async def api_auth_status(request: Request):
+    user = auth.get_optional_user(request)
+    return {
+        "deployment_mode": settings.DEPLOYMENT_MODE,
+        "is_web_mode": settings.IS_WEB_MODE,
+        "require_auth": settings.REQUIRE_AUTH,
+        "invite_code_required": bool(settings.INVITE_CODE),
+        "has_any_users": database.count_users() > 0,
+        "cloud_sync": cloud_sync.get_status(),
+        "user": user,
+    }
+
+
+@app.post("/api/auth/register")
+async def api_auth_register(req: RegisterRequest, response: Response):
+    try:
+        user = auth.register_user(
+            username=req.username,
+            password=req.password,
+            display_name=req.display_name,
+            invite_code=req.invite_code,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    token = auth.create_session_token(user)
+    _set_auth_cookie(response, token)
+    cloud_sync.schedule_push()
+    return {"ok": True, "token": token, "user": user}
+
+
+@app.post("/api/auth/login")
+async def api_auth_login(req: LoginRequest, response: Response):
+    try:
+        user = auth.authenticate_user(username=req.username, password=req.password)
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+    token = auth.create_session_token(user)
+    _set_auth_cookie(response, token)
+    return {"ok": True, "token": token, "user": user}
+
+
+@app.post("/api/auth/logout")
+async def api_auth_logout(response: Response):
+    response.delete_cookie(key=auth.COOKIE_NAME, path="/")
+    return {"ok": True}
+
+
 # --------------------------------------------------------------------------- Salud y Estado
 
 @app.get("/api/ping")
 async def api_ping():
-    return {"ok": True, "app": "GameHub Local"}
+    return {"ok": True, "app": "GameHub", "mode": settings.DEPLOYMENT_MODE}
 
 
 @app.get("/api/health")
-async def api_health():
+async def api_health(request: Request):
+    user = auth.get_optional_user(request)
     sources = source_manager.load_sources()
-    jd = await downloader.check_jd_status()
+    jd = (
+        {"running": False, "client_side": True}
+        if settings.IS_WEB_MODE
+        else await downloader.check_jd_status()
+    )
     return {
         "ok": True,
-        "app": "GameHub Local",
+        "app": "GameHub",
+        "deployment_mode": settings.DEPLOYMENT_MODE,
+        "is_web_mode": settings.IS_WEB_MODE,
+        "require_auth": settings.REQUIRE_AUTH,
+        "invite_code_required": bool(settings.INVITE_CODE),
+        "user": user,
         "sources_total": len(sources),
         "sources_enabled": sum(1 for s in sources if s.get("enabled", True)),
         "jdownloader": jd,
-        "stats": database.db_stats(),
+        "cloud_sync": cloud_sync.get_status(),
+        "stats": database.db_stats(user_id=_uid(user)),
     }
 
 
@@ -150,6 +250,7 @@ async def api_latest_releases(
     limit: int = Query(default=48, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     enrich: bool = Query(default=True),
+    user: dict | None = Depends(auth.require_user),
 ):
     active_sources = [s for s in source_manager.load_sources() if s.get("enabled", True)]
     if source_id:
@@ -182,7 +283,7 @@ async def api_latest_releases(
         async with new_client(timeout=8.0) as client:
             await steam_enricher.enrich_items(items, client, max_network_lookups=20)
 
-    bmarks = database.bookmark_ids()
+    bmarks = database.bookmark_ids(user_id=_uid(user))
     for it in items:
         it["bookmarked"] = it["id"] in bmarks
 
@@ -198,7 +299,10 @@ async def api_latest_releases(
 
 
 @app.post("/api/releases/refresh")
-async def api_refresh_releases(req: RefreshRequest | None = None):
+async def api_refresh_releases(
+    req: RefreshRequest | None = None,
+    _user: dict | None = Depends(auth.require_user),
+):
     req = req or RefreshRequest()
     return await source_manager.sync_sources(only_type=req.only_type, source_id=req.source_id)
 
@@ -207,12 +311,16 @@ async def api_refresh_releases(req: RefreshRequest | None = None):
 async def api_search(
     q: str = Query(default="", max_length=160),
     enrich: bool = Query(default=True),
+    user: dict | None = Depends(auth.require_user),
 ):
-    return await source_manager.unified_search(q, enrich=enrich)
+    return await source_manager.unified_search(q, enrich=enrich, user_id=_uid(user))
 
 
 @app.get("/api/steam/details/{appid}")
-async def api_steam_details(appid: int):
+async def api_steam_details(
+    appid: int,
+    _user: dict | None = Depends(auth.require_user),
+):
     if appid <= 0:
         raise HTTPException(status_code=400, detail="AppID inválido")
     try:
@@ -225,18 +333,22 @@ async def api_steam_details(appid: int):
     return details
 
 
-# --------------------------------------------------------------------------- Guardados (Favoritos)
+# --------------------------------------------------------------------------- Guardados (Favoritos por Cuenta)
 
 @app.get("/api/bookmarks")
-async def api_bookmarks():
-    return {"items": database.bookmark_list()}
+async def api_bookmarks(user: dict | None = Depends(auth.require_user)):
+    return {"items": database.bookmark_list(user_id=_uid(user))}
 
 
 @app.post("/api/bookmarks/toggle")
-async def api_bookmark_toggle(req: BookmarkRequest):
+async def api_bookmark_toggle(
+    req: BookmarkRequest,
+    user: dict | None = Depends(auth.require_user),
+):
     if not req.item.get("id") or not req.item.get("raw_title"):
         raise HTTPException(status_code=400, detail="Elemento inválido para guardar")
-    saved = database.bookmark_toggle(req.item)
+    saved = database.bookmark_toggle(req.item, user_id=_uid(user))
+    cloud_sync.schedule_push()
     return {"bookmarked": saved, "id": req.item["id"]}
 
 
@@ -249,6 +361,7 @@ async def api_calendar(
     genre: str | None = Query(default=None),
     q: str | None = Query(default=None, max_length=120),
     force_refresh: bool = Query(default=False),
+    user: dict | None = Depends(auth.require_user),
 ):
     return await release_calendar.get_calendar_data(
         mode=mode,
@@ -256,22 +369,26 @@ async def api_calendar(
         genre=genre or None,
         q=q or None,
         force_refresh=force_refresh,
+        user_id=_uid(user),
     )
 
 
 @app.post("/api/calendar/refresh")
-async def api_calendar_refresh():
+async def api_calendar_refresh(_user: dict | None = Depends(auth.require_user)):
     return await release_calendar.sync_calendar(force=True)
 
 
 @app.get("/api/calendar/favorites")
-async def api_calendar_favorites():
-    items = release_calendar.list_favorites()
+async def api_calendar_favorites(user: dict | None = Depends(auth.require_user)):
+    items = release_calendar.list_favorites(user_id=_uid(user))
     return {"items": items, "total": len(items)}
 
 
 @app.post("/api/calendar/favorites/toggle")
-async def api_calendar_favorite_toggle(req: CalendarFavoriteRequest):
+async def api_calendar_favorite_toggle(
+    req: CalendarFavoriteRequest,
+    user: dict | None = Depends(auth.require_user),
+):
     if req.item.get("appid") is None and not req.item.get("title"):
         raise HTTPException(status_code=400, detail="Falta el identificador o título del juego")
     appid = (
@@ -280,14 +397,23 @@ async def api_calendar_favorite_toggle(req: CalendarFavoriteRequest):
         else release_calendar.synthetic_game_id(str(req.item["title"]))
     )
     req.item["appid"] = appid
-    saved = release_calendar.toggle_favorite(req.item)
+    saved = release_calendar.toggle_favorite(req.item, user_id=_uid(user))
+    cloud_sync.schedule_push()
     return {"favorited": saved, "appid": appid}
 
 
 @app.post("/api/calendar/track")
-async def api_calendar_track(req: CalendarTrackRequest):
+async def api_calendar_track(
+    req: CalendarTrackRequest,
+    user: dict | None = Depends(auth.require_user),
+):
     try:
-        item = await release_calendar.search_and_add_game_to_calendar(req.query, favorite=req.favorite)
+        item = await release_calendar.search_and_add_game_to_calendar(
+            req.query,
+            favorite=req.favorite,
+            user_id=_uid(user),
+        )
+        cloud_sync.schedule_push()
         return {"ok": True, "item": item}
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -298,17 +424,21 @@ async def api_calendar_track(req: CalendarTrackRequest):
 # --------------------------------------------------------------------------- Gestión de Fuentes
 
 @app.get("/api/sources")
-async def api_list_sources():
+async def api_list_sources(_user: dict | None = Depends(auth.require_user)):
     return {"sources": source_manager.get_sources_with_stats()}
 
 
 @app.post("/api/sources")
-async def api_save_source(payload: SourcePayload):
+async def api_save_source(
+    payload: SourcePayload,
+    _admin: dict | None = Depends(auth.require_admin_or_local),
+):
     try:
         saved = source_manager.upsert_source(payload.model_dump())
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    cloud_sync.schedule_push()
     sync_res = None
     if payload.sync_now and saved.get("enabled") and saved.get("type") != "search_url":
         sync_res = await source_manager.sync_sources(source_id=saved["id"])
@@ -316,13 +446,17 @@ async def api_save_source(payload: SourcePayload):
 
 
 @app.patch("/api/sources/{source_id}/toggle")
-async def api_toggle_source(source_id: str):
+async def api_toggle_source(
+    source_id: str,
+    _admin: dict | None = Depends(auth.require_admin_or_local),
+):
     sources = source_manager.load_sources()
     target = next((s for s in sources if s["id"] == source_id), None)
     if not target:
         raise HTTPException(status_code=404, detail="Fuente no encontrada")
     target["enabled"] = not target.get("enabled", True)
     source_manager.save_sources(sources)
+    cloud_sync.schedule_push()
     if target["enabled"] and target.get("type") != "search_url":
         counts = database.count_by_source()
         if counts.get(source_id, 0) == 0:
@@ -331,14 +465,21 @@ async def api_toggle_source(source_id: str):
 
 
 @app.delete("/api/sources/{source_id}")
-async def api_delete_source(source_id: str):
+async def api_delete_source(
+    source_id: str,
+    _admin: dict | None = Depends(auth.require_admin_or_local),
+):
     if not source_manager.delete_source(source_id):
         raise HTTPException(status_code=404, detail="Fuente no encontrada")
+    cloud_sync.schedule_push()
     return {"deleted": True, "id": source_id}
 
 
 @app.post("/api/sources/autodetect")
-async def api_autodetect_source(req: AutodetectRequest):
+async def api_autodetect_source(
+    req: AutodetectRequest,
+    _admin: dict | None = Depends(auth.require_admin_or_local),
+):
     try:
         return await autodetect_url(req.url)
     except ValueError as exc:
@@ -346,7 +487,10 @@ async def api_autodetect_source(req: AutodetectRequest):
 
 
 @app.post("/api/sources/autodetect-batch")
-async def api_autodetect_batch(req: BatchAutodetectRequest):
+async def api_autodetect_batch(
+    req: BatchAutodetectRequest,
+    _admin: dict | None = Depends(auth.require_admin_or_local),
+):
     cleaned_urls = [u.strip() for u in req.urls if u and u.strip() and not u.strip().startswith("#")]
     if not cleaned_urls:
         raise HTTPException(status_code=400, detail="No se encontraron URLs válidas en la lista")
@@ -368,6 +512,7 @@ async def api_autodetect_batch(req: BatchAutodetectRequest):
         results = await asyncio.gather(*(_detect_one(u) for u in cleaned_urls[:30]))
 
     if req.auto_save and any(r["ok"] for r in results):
+        cloud_sync.schedule_push()
         await source_manager.sync_sources()
 
     return {
@@ -378,7 +523,10 @@ async def api_autodetect_batch(req: BatchAutodetectRequest):
 
 
 @app.post("/api/sources/probe")
-async def api_probe_source(payload: dict[str, Any]):
+async def api_probe_source(
+    payload: dict[str, Any],
+    _admin: dict | None = Depends(auth.require_admin_or_local),
+):
     try:
         return await source_manager.probe_source(payload)
     except Exception as exc:
@@ -386,13 +534,17 @@ async def api_probe_source(payload: dict[str, Any]):
 
 
 @app.get("/api/sources/export")
-async def api_export_sources():
+async def api_export_sources(_admin: dict | None = Depends(auth.require_admin_or_local)):
     return {"sources": source_manager.load_sources()}
 
 
 @app.post("/api/sources/import")
-async def api_import_sources(req: ImportSourcesRequest):
+async def api_import_sources(
+    req: ImportSourcesRequest,
+    _admin: dict | None = Depends(auth.require_admin_or_local),
+):
     res = source_manager.import_sources(req.sources, merge=req.merge)
+    cloud_sync.schedule_push()
     await source_manager.sync_sources()
     return res
 
@@ -400,12 +552,22 @@ async def api_import_sources(req: ImportSourcesRequest):
 # --------------------------------------------------------------------------- Descargas 1-Clic
 
 @app.get("/api/download/jd-status")
-async def api_jd_status():
+async def api_jd_status(_user: dict | None = Depends(auth.require_user)):
+    if settings.IS_WEB_MODE:
+        return {"running": False, "client_side": True}
     return await downloader.check_jd_status()
 
 
 @app.post("/api/download/magnet")
-async def api_open_magnet(req: MagnetRequest):
+async def api_open_magnet(
+    req: MagnetRequest,
+    _user: dict | None = Depends(auth.require_user),
+):
+    if settings.IS_WEB_MODE:
+        raise HTTPException(
+            status_code=403,
+            detail="En modo Web los enlaces Magnet se abren directamente en tu propio navegador.",
+        )
     try:
         return downloader.open_magnet(req.uri)
     except ValueError as exc:
@@ -415,7 +577,15 @@ async def api_open_magnet(req: MagnetRequest):
 
 
 @app.post("/api/download/jdownloader")
-async def api_send_jdownloader(req: JDownloaderRequest):
+async def api_send_jdownloader(
+    req: JDownloaderRequest,
+    _user: dict | None = Depends(auth.require_user),
+):
+    if settings.IS_WEB_MODE:
+        raise HTTPException(
+            status_code=403,
+            detail="En modo Web los enlaces se envían desde tu navegador a JDownloader 2 en tu PC.",
+        )
     try:
         return await downloader.send_to_jdownloader(req.urls, package_name=req.package_name)
     except ValueError as exc:
@@ -425,17 +595,27 @@ async def api_send_jdownloader(req: JDownloaderRequest):
 # --------------------------------------------------------------------------- Dependencias y Winget
 
 @app.get("/api/dependencies")
-async def api_dependencies():
+async def api_dependencies(_user: dict | None = Depends(auth.require_user)):
     return winget_manager.load_dependencies_config()
 
 
 @app.get("/api/dependencies/status")
-async def api_dependencies_status():
+async def api_dependencies_status(_user: dict | None = Depends(auth.require_user)):
+    if settings.IS_WEB_MODE:
+        return {"winget_available": False, "web_mode": True, "installed": {}}
     return await winget_manager.check_installed_status()
 
 
 @app.post("/api/dependencies/install")
-async def api_dependencies_install(req: WingetInstallRequest):
+async def api_dependencies_install(
+    req: WingetInstallRequest,
+    _user: dict | None = Depends(auth.require_user),
+):
+    if settings.IS_WEB_MODE:
+        raise HTTPException(
+            status_code=403,
+            detail="En modo Web descarga el instalador .bat o copia el comando winget para ejecutarlo en tu propio PC.",
+        )
     try:
         return await winget_manager.install_winget_packages(
             req.package_ids,
@@ -448,7 +628,12 @@ async def api_dependencies_install(req: WingetInstallRequest):
 # --------------------------------------------------------------------------- Acceso directo Escritorio
 
 @app.post("/api/system/desktop-shortcut")
-async def api_create_desktop_shortcut():
+async def api_create_desktop_shortcut(_user: dict | None = Depends(auth.require_user)):
+    if settings.IS_WEB_MODE:
+        raise HTTPException(
+            status_code=403,
+            detail="En modo Web puedes anclar esta página a tu barra de tareas desde el menú de tu navegador.",
+        )
     ps_script = settings.ROOT_DIR / "Crear_Acceso_Directo_Escritorio.ps1"
     if not ps_script.exists():
         raise HTTPException(status_code=404, detail="No se encontró Crear_Acceso_Directo_Escritorio.ps1")

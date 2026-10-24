@@ -1,7 +1,18 @@
-// GameHub Local — Frontend SPA (ES Module sin dependencias externas)
+// GameHub — Frontend SPA (Modo Local & Modo Web Cloud Multi-Usuario)
+
+const TOKEN_STORAGE_KEY = "gamehub_token";
 
 const state = {
   view: "latest",
+  // Despliegue y sesión de usuario
+  deploymentMode: "local",
+  isWebMode: false,
+  requireAuth: false,
+  inviteCodeRequired: false,
+  hasAnyUsers: false,
+  user: null,
+  authTab: "login",
+  // Novedades y Búsqueda
   latest: [],
   latestTotal: 0,
   latestOffset: 0,
@@ -62,8 +73,28 @@ function toast(msg, type = "ok") {
   setTimeout(() => el.remove(), 4200);
 }
 
+function getStoredToken() {
+  try {
+    return localStorage.getItem(TOKEN_STORAGE_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+function setStoredToken(token) {
+  try {
+    if (token) localStorage.setItem(TOKEN_STORAGE_KEY, token);
+    else localStorage.removeItem(TOKEN_STORAGE_KEY);
+  } catch {}
+}
+
 async function api(path, opts = {}) {
-  const init = { ...opts, headers: { "Content-Type": "application/json", ...(opts.headers || {}) } };
+  const headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
+  const tok = getStoredToken();
+  if (tok && !headers.Authorization) {
+    headers.Authorization = `Bearer ${tok}`;
+  }
+  const init = { ...opts, headers };
   if (init.body && typeof init.body !== "string") init.body = JSON.stringify(init.body);
   const res = await fetch(path, init);
   let data = null;
@@ -73,6 +104,12 @@ async function api(path, opts = {}) {
     data = null;
   }
   if (!res.ok) {
+    if (res.status === 401 && !path.startsWith("/api/auth/")) {
+      setStoredToken("");
+      state.user = null;
+      renderUserSessionUI();
+      openAuthModal(state.hasAnyUsers ? "login" : "register");
+    }
     throw new Error(data?.detail || `Error HTTP ${res.status}`);
   }
   return data;
@@ -162,10 +199,23 @@ function switchView(view) {
   if (view === "sources") loadSources();
 }
 
-// --------------------------------------------------------------------------- Acciones de Descarga
+// --------------------------------------------------------------------------- Acciones de Descarga (Local + Web Cloud)
 
 async function triggerMagnet(uri, ev) {
   ev?.stopPropagation();
+  if (!uri || !uri.toLowerCase().startsWith("magnet:?xt=")) {
+    toast("Enlace Magnet inválido", "err");
+    return;
+  }
+  if (state.isWebMode) {
+    const a = document.createElement("a");
+    a.href = uri;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    toast("🧲 Abriendo enlace Magnet en el cliente Torrent de tu PC...");
+    return;
+  }
   try {
     await api("/api/download/magnet", { method: "POST", body: { uri } });
     toast("🧲 Abriendo enlace Magnet en tu cliente Torrent...");
@@ -176,16 +226,60 @@ async function triggerMagnet(uri, ev) {
 
 async function triggerJDownloader(urls, packageName, ev) {
   ev?.stopPropagation();
+  const cleanUrls = (urls || []).filter((u) => /^(https?:\/\/|magnet:\?xt=)/i.test(u));
+  if (!cleanUrls.length) {
+    toast("No hay enlaces válidos para enviar", "err");
+    return;
+  }
+
+  if (state.isWebMode) {
+    let copied = false;
+    if (navigator.clipboard) {
+      try {
+        await navigator.clipboard.writeText(cleanUrls.join("\n"));
+        copied = true;
+      } catch {}
+    }
+    try {
+      const formBody = new URLSearchParams({
+        passwords: "",
+        source: window.location.href,
+        package: packageName || "GameHub",
+        urls: cleanUrls.join("\r\n"),
+      });
+      await fetch("http://127.0.0.1:9666/flash/add", {
+        method: "POST",
+        mode: "no-cors",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: formBody,
+      });
+      updateJdIndicator(true);
+      toast(
+        copied
+          ? `📦 Enviado a JDownloader 2 en tu PC (${cleanUrls.length} enlace/s + copiados)`
+          : `📦 Enviado a JDownloader 2 en tu PC (${cleanUrls.length} enlace/s)`
+      );
+    } catch {
+      toast(
+        copied
+          ? "📋 Enlaces copiados al portapapeles (abre JDownloader 2 en tu PC para capturarlos)"
+          : "Abre JDownloader 2 en tu PC o usa el botón Copiar enlaces",
+        copied ? "ok" : "err"
+      );
+    }
+    return;
+  }
+
   try {
     const res = await api("/api/download/jdownloader", {
       method: "POST",
-      body: { urls, package_name: packageName },
+      body: { urls: cleanUrls, package_name: packageName },
     });
     updateJdIndicator(res.online);
     if (!res.sent && res.urls_text && navigator.clipboard) {
       try { await navigator.clipboard.writeText(res.urls_text); } catch {}
     }
-    toast(res.message, res.sent ? "ok" : "ok");
+    toast(res.message, "ok");
   } catch (err) {
     toast(err.message, "err");
   }
@@ -1216,19 +1310,57 @@ async function openDetailDrawer(item) {
   }
 }
 
-// --------------------------------------------------------------------------- Vista 4: Dependencias
+// --------------------------------------------------------------------------- Vista 4: Dependencias (Local + Web Cloud)
+
+function buildWingetCmd(id) {
+  return `winget install --id ${id} -e --accept-package-agreements --accept-source-agreements`;
+}
+
+function downloadRuntimesBat() {
+  const runtimes = state.depsConfig.runtimes || [];
+  if (!runtimes.length) return;
+  const lines = [
+    "@echo off",
+    "chcp 65001 >nul",
+    "title GameHub - Instalador Oficial de Runtimes PC Gaming",
+    "echo ===============================================================",
+    "echo   GameHub - Instalando Runtimes Oficiales de Windows via Winget",
+    "echo ===============================================================",
+    "echo.",
+    ...runtimes.flatMap((r) => [
+      `echo [+] Instalando ${r.name} (${r.winget_id})...`,
+      buildWingetCmd(r.winget_id),
+      "echo.",
+    ]),
+    "echo ===============================================================",
+    "echo   Proceso completado. Ya puedes cerrar esta ventana.",
+    "echo ===============================================================",
+    "pause",
+  ];
+  const blob = new Blob([lines.join("\r\n")], { type: "text/plain;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "Instalar_Runtimes_GameHub.bat";
+  a.click();
+  toast("📥 Descargado Instalar_Runtimes_GameHub.bat — ejecútalo en tu PC");
+}
 
 async function loadDependencies() {
   try {
     state.depsConfig = await api("/api/dependencies");
     renderDependencies();
-    checkInstalledDeps(false);
+    if (!state.isWebMode) {
+      checkInstalledDeps(false);
+    } else {
+      $("#deps-counter").textContent = "Instalación local vía Winget (.bat)";
+    }
   } catch (err) {
     toast(err.message, "err");
   }
 }
 
 async function checkInstalledDeps(notify = true) {
+  if (state.isWebMode) return;
   const btn = $("#btn-check-deps");
   btn.disabled = true;
   btn.textContent = "⏳ Comprobando Winget...";
@@ -1249,6 +1381,14 @@ async function checkInstalledDeps(notify = true) {
 }
 
 async function installWinget(ids) {
+  if (state.isWebMode) {
+    if (ids.length > 1) {
+      downloadRuntimesBat();
+    } else if (ids.length === 1) {
+      await copyText(buildWingetCmd(ids[0]), `Comando Winget (${ids[0]})`);
+    }
+    return;
+  }
   try {
     const res = await api("/api/dependencies/install", {
       method: "POST",
@@ -1261,7 +1401,11 @@ async function installWinget(ids) {
 }
 
 function renderDepCard(dep) {
-  const isInstalled = Boolean(state.depsInstalled[dep.winget_id]);
+  const isInstalled = !state.isWebMode && Boolean(state.depsInstalled[dep.winget_id]);
+  const btnLabel = state.isWebMode
+    ? "📋 Copiar comando Winget"
+    : (isInstalled ? "↻ Reinstalar / Actualizar" : "⚡ Instalar en 1 clic");
+
   const card = document.createElement("div");
   card.className = "dep-card";
   card.innerHTML = `
@@ -1278,7 +1422,7 @@ function renderDepCard(dep) {
     ${dep.fixes ? `<div class="dep-fixes">💡 ${esc(dep.fixes)}</div>` : ""}
     <div style="display:flex;gap:8px;margin-top:4px;">
       <button class="btn ${isInstalled ? "btn-secondary" : "btn-primary"} btn-sm act-winget" style="flex:1;">
-        ${isInstalled ? "↻ Reinstalar / Actualizar" : "⚡ Instalar en 1 clic"}
+        ${btnLabel}
       </button>
       <a class="btn btn-secondary btn-sm" href="${esc(dep.official_url)}" target="_blank" rel="noopener">Web Oficial ↗</a>
     </div>
@@ -1325,6 +1469,13 @@ const TYPE_LABELS = {
   search_url: "Buscador Directo 1-Clic",
 };
 
+function canManageSources() {
+  if (!state.isWebMode && !state.requireAuth) {
+    return !state.user || Boolean(state.user.is_admin);
+  }
+  return Boolean(state.user?.is_admin);
+}
+
 async function loadSources() {
   try {
     const data = await api("/api/sources");
@@ -1332,8 +1483,13 @@ async function loadSources() {
     const active = state.sources.filter((s) => s.enabled);
     $("#badge-sources").textContent = String(active.length);
 
-    // Banner de bienvenida solo si la única fuente activa es la demo inicial
-    const onlyDemo = active.length <= 1 && active.every((s) => s.id === "catalogo-demo-local");
+    const editable = canManageSources();
+    $("#sources-admin-panel")?.classList.toggle("hidden", !editable);
+    $("#sources-admin-actions")?.classList.toggle("hidden", !editable);
+    $("#sources-readonly-note")?.classList.toggle("hidden", editable);
+
+    // Banner de bienvenida solo si la única fuente activa es la demo inicial y es admin
+    const onlyDemo = editable && active.length <= 1 && active.every((s) => s.id === "catalogo-demo-local");
     $("#demo-banner").classList.toggle("hidden", !onlyDemo);
 
     // Actualizar selector de fuentes en Novedades
@@ -1352,8 +1508,14 @@ async function loadSources() {
 function renderSourcesList() {
   const wrap = $("#sources-list");
   wrap.innerHTML = "";
+  const editable = canManageSources();
+
   if (!state.sources.length) {
-    wrap.innerHTML = `<div class="empty-state">No hay fuentes configuradas todavía. Pega una URL arriba y pulsa Autodetectar.</div>`;
+    wrap.innerHTML = `<div class="empty-state">${
+      editable
+        ? "No hay fuentes configuradas todavía. Pega una URL arriba y pulsa Autodetectar."
+        : "El administrador aún no ha añadido fuentes activas."
+    }</div>`;
     return;
   }
 
@@ -1368,69 +1530,216 @@ function renderSourcesList() {
           <span class="pill" style="padding:2px 9px;font-size:11px;">${esc(src.category)}</span>
           ${src.cached_items ? `<span class="size-tag">${src.cached_items} en caché</span>` : ""}
         </div>
-        <div style="font-size:12px;color:var(--text-dim);margin-top:4px;word-break:break-all;">
-          ${esc(src.url || src.search_url_template)}
-        </div>
-        ${src.last_error ? `<div style="font-size:12px;color:var(--rose);margin-top:4px;">⚠️ Último aviso: ${esc(src.last_error)}</div>` : ""}
+        ${editable ? `
+          <div style="font-size:12px;color:var(--text-dim);margin-top:4px;word-break:break-all;">
+            ${esc(src.url || src.search_url_template)}
+          </div>
+          ${src.last_error ? `<div style="font-size:12px;color:var(--rose);margin-top:4px;">⚠️ Último aviso: ${esc(src.last_error)}</div>` : ""}
+        ` : ""}
       </div>
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-        <button class="btn btn-secondary btn-sm s-test">🧪 Probar</button>
-        <button class="btn btn-secondary btn-sm s-edit">✏️ Editar</button>
-        <button class="btn btn-danger btn-sm s-del">🗑️</button>
-        <label class="switch" title="Activar / Desactivar fuente">
-          <input type="checkbox" class="s-toggle" ${src.enabled ? "checked" : ""} />
-          <span class="slider"></span>
-        </label>
+        ${editable ? `
+          <button class="btn btn-secondary btn-sm s-test">🧪 Probar</button>
+          <button class="btn btn-secondary btn-sm s-edit">✏️ Editar</button>
+          <button class="btn btn-danger btn-sm s-del">🗑️</button>
+          <label class="switch" title="Activar / Desactivar fuente">
+            <input type="checkbox" class="s-toggle" ${src.enabled ? "checked" : ""} />
+            <span class="slider"></span>
+          </label>
+        ` : `
+          <span class="badge ${src.enabled ? "badge-installed" : ""}">
+            ${src.enabled ? "✓ Activa" : "Inactiva"}
+          </span>
+        `}
       </div>
     `;
 
-    el.querySelector(".s-toggle").addEventListener("change", async () => {
-      await api(`/api/sources/${encodeURIComponent(src.id)}/toggle`, { method: "PATCH" });
-      await loadSources();
-      await loadLatest(true);
-    });
+    if (editable) {
+      el.querySelector(".s-toggle").addEventListener("change", async () => {
+        await api(`/api/sources/${encodeURIComponent(src.id)}/toggle`, { method: "PATCH" });
+        await loadSources();
+        await loadLatest(true);
+      });
 
-    el.querySelector(".s-test").addEventListener("click", async (e) => {
-      const btn = e.currentTarget;
-      btn.disabled = true;
-      btn.textContent = "⏳...";
-      try {
-        const res = await api("/api/sources/probe", { method: "POST", body: src });
-        toast(`✅ ${src.name}: ${res.message}`);
-      } catch (err) {
-        toast(err.message, "err");
-      } finally {
-        btn.disabled = false;
-        btn.textContent = "🧪 Probar";
-      }
-    });
+      el.querySelector(".s-test").addEventListener("click", async (e) => {
+        const btn = e.currentTarget;
+        btn.disabled = true;
+        btn.textContent = "⏳...";
+        try {
+          const res = await api("/api/sources/probe", { method: "POST", body: src });
+          toast(`✅ ${src.name}: ${res.message}`);
+        } catch (err) {
+          toast(err.message, "err");
+        } finally {
+          btn.disabled = false;
+          btn.textContent = "🧪 Probar";
+        }
+      });
 
-    el.querySelector(".s-edit").addEventListener("click", () => {
-      $("#manual-source-form").classList.remove("hidden");
-      $("#src-id").value = src.id;
-      $("#src-name").value = src.name;
-      $("#src-type").value = src.type;
-      $("#src-category").value = src.category || "Descarga Directa";
-      $("#src-url").value = src.url || "";
-      $("#src-template").value = src.search_url_template || "";
-      $("#manual-source-form").scrollIntoView({ behavior: "smooth" });
-    });
+      el.querySelector(".s-edit").addEventListener("click", () => {
+        $("#manual-source-form").classList.remove("hidden");
+        $("#src-id").value = src.id;
+        $("#src-name").value = src.name;
+        $("#src-type").value = src.type;
+        $("#src-category").value = src.category || "Descarga Directa";
+        $("#src-url").value = src.url || "";
+        $("#src-template").value = src.search_url_template || "";
+        $("#manual-source-form").scrollIntoView({ behavior: "smooth" });
+      });
 
-    el.querySelector(".s-del").addEventListener("click", async () => {
-      if (!confirm(`¿Eliminar la fuente «${src.name}» y su caché local?`)) return;
-      await api(`/api/sources/${encodeURIComponent(src.id)}`, { method: "DELETE" });
-      toast(`Fuente «${src.name}» eliminada`);
-      await loadSources();
-      await loadLatest(true);
-    });
+      el.querySelector(".s-del").addEventListener("click", async () => {
+        if (!confirm(`¿Eliminar la fuente «${src.name}» y su caché local?`)) return;
+        await api(`/api/sources/${encodeURIComponent(src.id)}`, { method: "DELETE" });
+        toast(`Fuente «${src.name}» eliminada`);
+        await loadSources();
+        await loadLatest(true);
+      });
+    }
 
     wrap.appendChild(el);
   });
 }
 
+// --------------------------------------------------------------------------- Cuentas de Usuario, Login y Modo Web
+
+function renderUserSessionUI() {
+  const box = $("#sidebar-user-box");
+  const topSlot = $("#topbar-user-slot");
+  const u = state.user;
+
+  if (u) {
+    const initials = (u.display_name || u.username || "U").slice(0, 2).toUpperCase();
+    box.innerHTML = `
+      <div class="user-avatar" title="${esc(u.display_name)} (@${esc(u.username)})">${esc(initials)}</div>
+      <div class="user-meta">
+        <div class="user-name">
+          <span>${esc(u.display_name)}</span>
+          ${u.is_admin ? `<span class="badge-admin">Admin</span>` : ""}
+        </div>
+        <div class="user-handle">@${esc(u.username)}</div>
+      </div>
+      <button class="btn btn-secondary btn-sm" id="btn-logout-sidebar" title="Cerrar sesión">Salir</button>
+    `;
+    box.querySelector("#btn-logout-sidebar")?.addEventListener("click", logoutUser);
+
+    if (topSlot) {
+      topSlot.innerHTML = `
+        <span class="topbar-user-pill" title="Sesión iniciada como @${esc(u.username)}">
+          👤 ${esc(u.display_name)}
+        </span>
+      `;
+    }
+  } else {
+    box.innerHTML = `
+      <button class="btn btn-secondary btn-sm" id="btn-open-auth-sidebar" style="width:100%;">
+        👤 Crear cuenta / Iniciar sesión
+      </button>
+    `;
+    box.querySelector("#btn-open-auth-sidebar")?.addEventListener("click", () =>
+      openAuthModal(state.hasAnyUsers ? "login" : "register")
+    );
+    if (topSlot) {
+      topSlot.innerHTML = `
+        <button class="btn btn-secondary btn-sm" id="btn-open-auth-top">👤 Entrar</button>
+      `;
+      topSlot.querySelector("#btn-open-auth-top")?.addEventListener("click", () =>
+        openAuthModal(state.hasAnyUsers ? "login" : "register")
+      );
+    }
+  }
+}
+
+function applyDeploymentModeUI() {
+  const modeBadge = $("#mode-badge");
+  if (modeBadge) {
+    modeBadge.textContent = state.isWebMode ? "WEB CLOUD" : "LOCAL";
+    modeBadge.classList.toggle("badge-web", state.isWebMode);
+  }
+  document.title = state.isWebMode
+    ? "GameHub Cloud — Tu Centro Gaming Compartido"
+    : "GameHub Local — Centro de Mando PC Gaming";
+
+  $("#btn-desktop-shortcut")?.classList.toggle("hidden", state.isWebMode);
+  $("#btn-check-deps")?.classList.toggle("hidden", state.isWebMode);
+
+  const installAllBtn = $("#btn-install-all-runtimes");
+  if (installAllBtn) {
+    installAllBtn.textContent = state.isWebMode
+      ? "📥 Descargar Instalador Runtimes (.bat)"
+      : "⚡ Instalar Todos los Runtimes Esenciales";
+  }
+
+  if (state.isWebMode) {
+    $("#jd-label").textContent = "JD2 (Tu PC): Listo";
+    $("#jd-dot").classList.add("online");
+    $("#btn-check-jd")?.classList.add("hidden");
+  } else {
+    $("#btn-check-jd")?.classList.remove("hidden");
+  }
+
+  renderUserSessionUI();
+}
+
+function setAuthTab(tab) {
+  state.authTab = tab === "register" ? "register" : "login";
+  const isReg = state.authTab === "register";
+  $("#tab-auth-login")?.classList.toggle("active", !isReg);
+  $("#tab-auth-register")?.classList.toggle("active", isReg);
+  $("#field-auth-displayname")?.classList.toggle("hidden", !isReg);
+  $("#field-auth-invite")?.classList.toggle("hidden", !(isReg && state.inviteCodeRequired));
+  $("#auth-first-admin-hint")?.classList.toggle("hidden", !(isReg && !state.hasAnyUsers));
+  $("#auth-password").autocomplete = isReg ? "new-password" : "current-password";
+  $("#btn-auth-submit").textContent = isReg ? "✨ Crear mi cuenta y entrar →" : "🔑 Iniciar sesión →";
+  $("#auth-error")?.classList.add("hidden");
+}
+
+function openAuthModal(tab = "login") {
+  setAuthTab(tab);
+  const canDismiss = !state.requireAuth || Boolean(state.user);
+  $("#auth-close-btn")?.classList.toggle("hidden", !canDismiss);
+  $("#auth-overlay")?.classList.remove("hidden");
+  setTimeout(() => $("#auth-username")?.focus(), 40);
+}
+
+function closeAuthModal() {
+  if (state.requireAuth && !state.user) return;
+  $("#auth-overlay")?.classList.add("hidden");
+}
+
+async function loadAuthenticatedData() {
+  state.calLoaded = false;
+  await Promise.all([refreshHealthBadges(), loadSources()]);
+  await loadLatest(true);
+  if (state.view === "bookmarks") await loadBookmarks();
+  if (state.view === "calendar") await loadCalendar(false);
+  if (state.view === "search" && state.searchQuery) await runSearch(state.searchQuery);
+}
+
+async function logoutUser() {
+  try {
+    await api("/api/auth/logout", { method: "POST" });
+  } catch {}
+  setStoredToken("");
+  state.user = null;
+  state.bookmarks = [];
+  state.calLoaded = false;
+  renderUserSessionUI();
+  toast("Sesión cerrada");
+  if (state.requireAuth) {
+    openAuthModal("login");
+  } else {
+    await loadAuthenticatedData();
+  }
+}
+
 // --------------------------------------------------------------------------- Salud y Eventos Globales
 
 function updateJdIndicator(online) {
+  if (state.isWebMode) {
+    $("#jd-dot").classList.add("online");
+    $("#jd-label").textContent = "JD2 (Tu PC): Listo";
+    return;
+  }
   state.jdOnline = Boolean(online);
   $("#jd-dot").classList.toggle("online", state.jdOnline);
   $("#jd-label").textContent = state.jdOnline ? "JDownloader 2: Conectado" : "JDownloader 2: Off";
@@ -1439,6 +1748,10 @@ function updateJdIndicator(online) {
 async function refreshHealthBadges() {
   try {
     const h = await api("/api/health");
+    if (h.user !== undefined) {
+      state.user = h.user;
+      renderUserSessionUI();
+    }
     updateJdIndicator(h.jdownloader?.online);
     $("#badge-bookmarks").textContent = String(h.stats?.bookmarks || 0);
     $("#badge-calendar").textContent = String(h.stats?.calendar_favorites || 0);
@@ -1454,15 +1767,66 @@ function bindEvents() {
     btn.addEventListener("click", () => switchView(btn.dataset.goto))
   );
 
+  // Modal de Cuentas / Login / Registro
+  $("#tab-auth-login")?.addEventListener("click", () => setAuthTab("login"));
+  $("#tab-auth-register")?.addEventListener("click", () => setAuthTab("register"));
+  $("#auth-close-btn")?.addEventListener("click", closeAuthModal);
+  $("#auth-overlay")?.addEventListener("click", (e) => {
+    if (e.target.id === "auth-overlay") closeAuthModal();
+  });
+
+  $("#auth-form")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const errBox = $("#auth-error");
+    const submitBtn = $("#btn-auth-submit");
+    errBox.classList.add("hidden");
+
+    const username = $("#auth-username").value.trim();
+    const password = $("#auth-password").value;
+    const display_name = $("#auth-displayname").value.trim();
+    const invite_code = $("#auth-invite").value.trim();
+
+    const isReg = state.authTab === "register";
+    submitBtn.disabled = true;
+    submitBtn.textContent = isReg ? "⏳ Creando cuenta..." : "⏳ Verificando...";
+    try {
+      const endpoint = isReg ? "/api/auth/register" : "/api/auth/login";
+      const body = isReg
+        ? { username, password, display_name, invite_code }
+        : { username, password };
+      const res = await api(endpoint, { method: "POST", body });
+      setStoredToken(res.token || "");
+      state.user = res.user;
+      state.hasAnyUsers = true;
+      $("#auth-password").value = "";
+      $("#auth-overlay")?.classList.add("hidden");
+      renderUserSessionUI();
+      toast(
+        isReg
+          ? `🎉 ¡Cuenta creada! Bienvenido, ${res.user.display_name}`
+          : `👋 ¡Hola de nuevo, ${res.user.display_name}!`
+      );
+      await loadAuthenticatedData();
+    } catch (err) {
+      errBox.textContent = err.message;
+      errBox.classList.remove("hidden");
+    } finally {
+      submitBtn.disabled = false;
+      setAuthTab(state.authTab);
+    }
+  });
+
   // Atajo global Ctrl+K y Esc
   window.addEventListener("keydown", (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+      if (!$("#auth-overlay")?.classList.contains("hidden")) return;
       e.preventDefault();
       const input = $("#global-search-input");
       input.focus();
       input.select();
     } else if (e.key === "Escape") {
       $("#detail-backdrop").classList.add("hidden");
+      closeAuthModal();
     }
   });
 
@@ -1648,6 +2012,7 @@ function bindEvents() {
 
   // JDownloader status & Acceso directo
   $("#btn-check-jd").addEventListener("click", async () => {
+    if (state.isWebMode) return;
     const st = await api("/api/download/jd-status");
     updateJdIndicator(st.online);
     toast(st.online ? "✅ JDownloader 2 detectado en 127.0.0.1:9666" : "JDownloader 2 no responde (ábrelo si quieres envío directo)");
@@ -1802,8 +2167,24 @@ function bindEvents() {
 
 async function init() {
   bindEvents();
-  await Promise.all([refreshHealthBadges(), loadSources()]);
-  await loadLatest(true);
+  try {
+    const authStatus = await api("/api/auth/status");
+    state.deploymentMode = authStatus.deployment_mode || "local";
+    state.isWebMode = Boolean(authStatus.is_web_mode);
+    state.requireAuth = Boolean(authStatus.require_auth);
+    state.inviteCodeRequired = Boolean(authStatus.invite_code_required);
+    state.hasAnyUsers = Boolean(authStatus.has_any_users);
+    state.user = authStatus.user || null;
+  } catch {}
+
+  applyDeploymentModeUI();
+
+  if (state.requireAuth && !state.user) {
+    openAuthModal(state.hasAnyUsers ? "login" : "register");
+    return;
+  }
+
+  await loadAuthenticatedData();
 }
 
 init();

@@ -1194,25 +1194,26 @@ def _save_calendar_events(items: list[dict]) -> int:
             """,
             rows,
         )
-        # Sincronizar fechas, plataformas y portadas actualizadas en los favoritos guardados
-        conn.execute(
-            """UPDATE calendar_favorites
-               SET release_date = (SELECT release_date FROM calendar_events WHERE calendar_events.appid = calendar_favorites.appid),
-                   precision    = (SELECT precision FROM calendar_events WHERE calendar_events.appid = calendar_favorites.appid),
-                   window_label = (SELECT window_label FROM calendar_events WHERE calendar_events.appid = calendar_favorites.appid),
-                   platforms    = (SELECT platforms FROM calendar_events WHERE calendar_events.appid = calendar_favorites.appid),
-                   poster_url   = CASE
-                       WHEN (SELECT poster_url FROM calendar_events WHERE calendar_events.appid = calendar_favorites.appid) != ''
-                       THEN (SELECT poster_url FROM calendar_events WHERE calendar_events.appid = calendar_favorites.appid)
-                       ELSE calendar_favorites.poster_url
-                   END,
-                   summary      = CASE
-                       WHEN (SELECT summary FROM calendar_events WHERE calendar_events.appid = calendar_favorites.appid) != ''
-                       THEN (SELECT summary FROM calendar_events WHERE calendar_events.appid = calendar_favorites.appid)
-                       ELSE calendar_favorites.summary
-                   END
-               WHERE appid IN (SELECT appid FROM calendar_events)"""
-        )
+        # Sincronizar fechas, plataformas y portadas actualizadas en los favoritos guardados (locales y por cuenta)
+        for fav_tbl in ("calendar_favorites", "user_calendar_favorites"):
+            conn.execute(
+                f"""UPDATE {fav_tbl}
+                    SET release_date = (SELECT release_date FROM calendar_events WHERE calendar_events.appid = {fav_tbl}.appid),
+                        precision    = (SELECT precision FROM calendar_events WHERE calendar_events.appid = {fav_tbl}.appid),
+                        window_label = (SELECT window_label FROM calendar_events WHERE calendar_events.appid = {fav_tbl}.appid),
+                        platforms    = (SELECT platforms FROM calendar_events WHERE calendar_events.appid = {fav_tbl}.appid),
+                        poster_url   = CASE
+                            WHEN (SELECT poster_url FROM calendar_events WHERE calendar_events.appid = {fav_tbl}.appid) != ''
+                            THEN (SELECT poster_url FROM calendar_events WHERE calendar_events.appid = {fav_tbl}.appid)
+                            ELSE {fav_tbl}.poster_url
+                        END,
+                        summary      = CASE
+                            WHEN (SELECT summary FROM calendar_events WHERE calendar_events.appid = {fav_tbl}.appid) != ''
+                            THEN (SELECT summary FROM calendar_events WHERE calendar_events.appid = {fav_tbl}.appid)
+                            ELSE {fav_tbl}.summary
+                        END
+                    WHERE appid IN (SELECT appid FROM calendar_events)"""
+            )
         conn.execute(
             "INSERT OR REPLACE INTO calendar_meta(key, value) VALUES ('last_sync', ?)",
             (now,),
@@ -1294,54 +1295,89 @@ def _row_to_cal_item(row, fav_ids: set[int]) -> dict:
     return d
 
 
-def favorite_ids() -> set[int]:
+def favorite_ids(user_id: int | None = None) -> set[int]:
     with database.connect() as conn:
-        rows = conn.execute("SELECT appid FROM calendar_favorites").fetchall()
+        if user_id and user_id > 0:
+            rows = conn.execute(
+                "SELECT appid FROM user_calendar_favorites WHERE user_id=?",
+                (int(user_id),),
+            ).fetchall()
+        else:
+            rows = conn.execute("SELECT appid FROM calendar_favorites").fetchall()
     return {int(r[0]) for r in rows}
 
 
-def list_favorites() -> list[dict]:
+def list_favorites(user_id: int | None = None) -> list[dict]:
     with database.connect() as conn:
-        rows = conn.execute(
-            "SELECT * FROM calendar_favorites ORDER BY COALESCE(release_date, '9999-12-31') ASC, saved_at DESC"
-        ).fetchall()
+        if user_id and user_id > 0:
+            rows = conn.execute(
+                "SELECT * FROM user_calendar_favorites WHERE user_id=? "
+                "ORDER BY COALESCE(release_date, '9999-12-31') ASC, saved_at DESC",
+                (int(user_id),),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM calendar_favorites ORDER BY COALESCE(release_date, '9999-12-31') ASC, saved_at DESC"
+            ).fetchall()
     favs = {int(r["appid"]) for r in rows}
     return [_row_to_cal_item(r, favs) for r in rows]
 
 
-def toggle_favorite(item: dict) -> bool:
+def toggle_favorite(item: dict, user_id: int | None = None) -> bool:
     raw_id = item.get("appid")
     if raw_id is None or raw_id == "":
         appid = synthetic_game_id(str(item.get("title") or "game"))
     else:
         appid = int(raw_id)
 
+    default_urls = poster_urls(appid) if appid > 0 else {"poster_url": "", "header_url": "", "store_url": ""}
+    common_vals = (
+        str(item.get("title") or f"Juego {abs(appid)}"),
+        item.get("release_date") or "9999-12-31",
+        item.get("precision") or "tba",
+        item.get("window_label") or "Próximamente",
+        json.dumps(item.get("genres") or [], ensure_ascii=False),
+        json.dumps(normalize_platforms(item.get("platforms") or ["PC"]) or ["PC"], ensure_ascii=False),
+        item.get("poster_url") or default_urls["poster_url"],
+        item.get("header_url") or default_urls["header_url"],
+        item.get("store_url") or default_urls["store_url"],
+        str(item.get("summary") or ""),
+        time.time(),
+    )
+
     with database.connect() as conn:
+        if user_id and user_id > 0:
+            uid = int(user_id)
+            exists = conn.execute(
+                "SELECT 1 FROM user_calendar_favorites WHERE user_id=? AND appid=?",
+                (uid, appid),
+            ).fetchone()
+            if exists:
+                conn.execute(
+                    "DELETE FROM user_calendar_favorites WHERE user_id=? AND appid=?",
+                    (uid, appid),
+                )
+                return False
+            conn.execute(
+                """INSERT INTO user_calendar_favorites (
+                       user_id, appid, title, release_date, precision, window_label,
+                       genres, platforms, poster_url, header_url, store_url, summary, saved_at
+                   ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (uid, appid, *common_vals),
+            )
+            return True
+
         exists = conn.execute("SELECT 1 FROM calendar_favorites WHERE appid=?", (appid,)).fetchone()
         if exists:
             conn.execute("DELETE FROM calendar_favorites WHERE appid=?", (appid,))
             return False
 
-        default_urls = poster_urls(appid) if appid > 0 else {"poster_url": "", "header_url": "", "store_url": ""}
         conn.execute(
             """INSERT INTO calendar_favorites (
                    appid, title, release_date, precision, window_label,
                    genres, platforms, poster_url, header_url, store_url, summary, saved_at
                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (
-                appid,
-                str(item.get("title") or f"Juego {abs(appid)}"),
-                item.get("release_date") or "9999-12-31",
-                item.get("precision") or "tba",
-                item.get("window_label") or "Próximamente",
-                json.dumps(item.get("genres") or [], ensure_ascii=False),
-                json.dumps(normalize_platforms(item.get("platforms") or ["PC"]) or ["PC"], ensure_ascii=False),
-                item.get("poster_url") or default_urls["poster_url"],
-                item.get("header_url") or default_urls["header_url"],
-                item.get("store_url") or default_urls["store_url"],
-                str(item.get("summary") or ""),
-                time.time(),
-            ),
+            (appid, *common_vals),
         )
         return True
 
@@ -1352,10 +1388,11 @@ async def get_calendar_data(
     genre: str | None = None,
     q: str | None = None,
     force_refresh: bool = False,
+    user_id: int | None = None,
 ) -> dict:
     await sync_calendar(force=force_refresh)
 
-    fav_list = list_favorites()
+    fav_list = list_favorites(user_id=user_id)
     fav_set = {f["appid"] for f in fav_list}
 
     if mode == "favorites":
@@ -1584,7 +1621,11 @@ async def _search_wikipedia_candidate(q: str) -> dict | None:
         return None
 
 
-async def search_and_add_game_to_calendar(query: str, favorite: bool = True) -> dict:
+async def search_and_add_game_to_calendar(
+    query: str,
+    favorite: bool = True,
+    user_id: int | None = None,
+) -> dict:
     """Busca cualquier juego de PC, Nintendo Switch 2 o PS5 y lo añade al calendario."""
     q = (query or "").strip()
     if not q:
@@ -1592,10 +1633,11 @@ async def search_and_add_game_to_calendar(query: str, favorite: bool = True) -> 
 
     # 1) Si ya existe una coincidencia exacta en nuestra base multi-plataforma local, usarla al instante
     q_canon = canonical_calendar_key(q)
+    cur_favs = favorite_ids(user_id=user_id)
     with database.connect() as conn:
         rows = conn.execute("SELECT * FROM calendar_events").fetchall()
     existing_matches = [
-        _row_to_cal_item(r, favorite_ids())
+        _row_to_cal_item(r, cur_favs)
         for r in rows
         if canonical_calendar_key(r["title"]) == q_canon
     ]
@@ -1603,9 +1645,9 @@ async def search_and_add_game_to_calendar(query: str, favorite: bool = True) -> 
         item = existing_matches[0]
         item["is_hot"] = 1
         _save_calendar_events([item])
-        if favorite and item["appid"] not in favorite_ids():
-            toggle_favorite(item)
-        item["favorited"] = item["appid"] in favorite_ids()
+        if favorite and item["appid"] not in cur_favs:
+            toggle_favorite(item, user_id=user_id)
+        item["favorited"] = item["appid"] in favorite_ids(user_id=user_id)
         return item
 
     # 2) Consultar en paralelo Steam (PC) + Nintendo eShop (Switch 2 / Switch) + Wikipedia (PS5 / Xbox / Exclusivos)
@@ -1635,7 +1677,7 @@ async def search_and_add_game_to_calendar(query: str, favorite: bool = True) -> 
     primary["is_hot"] = 1
 
     _save_calendar_events([primary])
-    if favorite and int(primary["appid"]) not in favorite_ids():
-        toggle_favorite(primary)
-    primary["favorited"] = int(primary["appid"]) in favorite_ids()
+    if favorite and int(primary["appid"]) not in favorite_ids(user_id=user_id):
+        toggle_favorite(primary, user_id=user_id)
+    primary["favorited"] = int(primary["appid"]) in favorite_ids(user_id=user_id)
     return primary

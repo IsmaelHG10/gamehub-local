@@ -230,7 +230,7 @@ async def probe_source(payload: dict) -> dict:
         }
 
 
-async def unified_search(query: str, enrich: bool = True) -> dict[str, Any]:
+async def unified_search(query: str, enrich: bool = True, user_id: int | None = None) -> dict[str, Any]:
     q = (query or "").strip()
     if not q:
         return {"query": "", "items": [], "groups": [], "external_links": []}
@@ -277,7 +277,7 @@ async def unified_search(query: str, enrich: bool = True) -> dict[str, Any]:
         if enrich and items:
             await steam_enricher.enrich_items(items, client, max_network_lookups=20)
 
-    bmarks = database.bookmark_ids()
+    bmarks = database.bookmark_ids(user_id=user_id)
     for it in items:
         it["bookmarked"] = it["id"] in bmarks
 

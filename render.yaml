@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: gamehub
+    runtime: docker
+    plan: free
+    healthCheckPath: /api/ping
+    envVars:
+      - key: GAMEHUB_MODE
+        value: web
+      - key: GAMEHUB_REQUIRE_AUTH
+        value: "true"
+      - key: GAMEHUB_SECRET_KEY
+        generateValue: true
+      - key: GITHUB_STATE_REPO
+        value: IsmaelHG10/gamehub-local
+      - key: GITHUB_STATE_BRANCH
+        value: gamehub-state
+      - key: GITHUB_STATE_TOKEN
+        sync: false
+      - key: GAMEHUB_INVITE_CODE
+        sync: false

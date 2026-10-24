@@ -83,10 +83,17 @@ def isolated_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     (cfg_dir / "dependencies.json").write_text(real_deps.read_text(encoding="utf-8"), encoding="utf-8")
 
     monkeypatch.setattr(settings, "CONFIG_DIR", cfg_dir)
+    monkeypatch.setattr(settings, "DATA_DIR", tmp_path / "data")
     monkeypatch.setattr(settings, "SOURCES_FILE", cfg_dir / "sources.json")
     monkeypatch.setattr(settings, "DEPENDENCIES_FILE", cfg_dir / "dependencies.json")
     monkeypatch.setattr(settings, "DB_PATH", db_file)
     monkeypatch.setattr(settings, "AUTO_SYNC", False)
+    monkeypatch.setattr(settings, "DEPLOYMENT_MODE", "local")
+    monkeypatch.setattr(settings, "IS_WEB_MODE", False)
+    monkeypatch.setattr(settings, "REQUIRE_AUTH", False)
+    monkeypatch.setattr(settings, "INVITE_CODE", "")
+    monkeypatch.setattr(settings, "GITHUB_STATE_TOKEN", "")
+    monkeypatch.setattr(settings, "GITHUB_STATE_REPO", "")
     database.init_db()
     return tmp_path
 
@@ -526,5 +533,190 @@ def test_multiplatform_calendar_switch2_ps5_and_merge(isolated_env: Path):
 
         favs = client.get("/api/calendar/favorites").json()["items"]
         assert any(f["title"] == "The Duskbloods" and "Switch 2" in f["platforms"] for f in favs)
+
+
+# --------------------------------------------------------------------------- 7. Modo Web Cloud, Multi-Cuenta, Favoritos Persistentes y RBAC
+
+def test_web_mode_multiuser_accounts_persistent_favorites_and_rbac(
+    isolated_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from backend.main import app
+    from backend.services import release_calendar
+
+    monkeypatch.setattr(settings, "DEPLOYMENT_MODE", "web")
+    monkeypatch.setattr(settings, "IS_WEB_MODE", True)
+    monkeypatch.setattr(settings, "REQUIRE_AUTH", True)
+    monkeypatch.setattr(settings, "INVITE_CODE", "amigos2026")
+
+    release_calendar._save_calendar_events([
+        {
+            "appid": -9001,
+            "title": "Grand Theft Auto VI",
+            "release_date": "2026-11-19",
+            "precision": "day",
+            "window_label": "19 Noviembre 2026",
+            "is_hot": 1,
+            "genres": ["Acción"],
+            "platforms": ["PS5", "Xbox Series"],
+            "poster_url": "https://example.org/gtavi.jpg",
+            "header_url": "https://example.org/gtavi.jpg",
+            "store_url": "https://www.playstation.com/es-es/games/grand-theft-auto-vi/",
+            "summary": "Vice City.",
+        },
+        {
+            "appid": -9002,
+            "title": "The Duskbloods",
+            "release_date": "9999-12-31",
+            "precision": "tba",
+            "window_label": "Próximamente",
+            "is_hot": 1,
+            "genres": ["Acción", "RPG"],
+            "platforms": ["Switch 2"],
+            "poster_url": "https://example.org/dusk.jpg",
+            "header_url": "https://example.org/dusk.jpg",
+            "store_url": "https://www.nintendo.com/es-es/",
+            "summary": "Switch 2 exclusive.",
+        },
+    ])
+
+    with TestClient(app) as client:
+        # Healthcheck público siempre accesible para Render / HF Spaces
+        assert client.get("/api/ping").status_code == 200
+
+        # Rutas protegidas exigen sesión en modo Web
+        assert client.get("/api/releases/latest").status_code == 401
+        assert client.get("/api/bookmarks").status_code == 401
+        assert client.get("/api/calendar").status_code == 401
+
+        # Código de invitación obligatorio
+        r_bad_inv = client.post(
+            "/api/auth/register",
+            json={"username": "intruso", "password": "password123", "invite_code": "incorrecto"},
+        )
+        assert r_bad_inv.status_code == 400
+
+        # 1) Crear cuenta de Ismael (primera cuenta -> Administrador)
+        r_reg1 = client.post(
+            "/api/auth/register",
+            json={
+                "username": "Ismael",
+                "display_name": "Ismael HG",
+                "password": "supersecret1",
+                "invite_code": "amigos2026",
+            },
+        )
+        assert r_reg1.status_code == 200
+        tok_ismael = r_reg1.json()["token"]
+        assert r_reg1.json()["user"]["is_admin"] is True
+        h_ismael = {"Authorization": f"Bearer {tok_ismael}"}
+
+        # 2) Crear cuenta de un amigo (segunda cuenta -> Miembro sin permisos sobre fuentes globales)
+        client.cookies.clear()
+        r_reg2 = client.post(
+            "/api/auth/register",
+            json={
+                "username": "alex",
+                "display_name": "Alex",
+                "password": "amigoPassword2",
+                "invite_code": "amigos2026",
+            },
+        )
+        assert r_reg2.status_code == 200
+        tok_alex = r_reg2.json()["token"]
+        assert r_reg2.json()["user"]["is_admin"] is False
+        h_alex = {"Authorization": f"Bearer {tok_alex}"}
+        client.cookies.clear()
+
+        # Cargar catálogo inicial
+        items = client.get("/api/releases/latest?enrich=false", headers=h_ismael).json()["items"]
+        portal_item = next(i for i in items if "Portal 2" in i["clean_title"])
+        hk_item = next(i for i in items if "Hollow Knight" in i["clean_title"])
+
+        cal_items = client.get("/api/calendar?mode=hot", headers=h_ismael).json()["items"]
+        gta_cal = next(c for c in cal_items if c["title"] == "Grand Theft Auto VI")
+        dusk_cal = next(c for c in cal_items if c["title"] == "The Duskbloods")
+
+        # Ismael guarda Portal 2 y sigue GTA VI
+        assert client.post("/api/bookmarks/toggle", json={"item": portal_item}, headers=h_ismael).json()["bookmarked"] is True
+        assert client.post("/api/calendar/favorites/toggle", json={"item": gta_cal}, headers=h_ismael).json()["favorited"] is True
+
+        # Alex guarda Hollow Knight y sigue The Duskbloods
+        assert client.post("/api/bookmarks/toggle", json={"item": hk_item}, headers=h_alex).json()["bookmarked"] is True
+        assert client.post("/api/calendar/favorites/toggle", json={"item": dusk_cal}, headers=h_alex).json()["favorited"] is True
+
+        # RBAC: Alex NO puede borrar ni añadir fuentes globales; Ismael (Admin) sí puede
+        assert client.delete("/api/sources/test-ext", headers=h_alex).status_code == 403
+        assert (
+            client.post(
+                "/api/sources",
+                json={"name": "Nueva Web", "type": "search_url", "search_url_template": "https://nueva.test/?s={query}"},
+                headers=h_ismael,
+            ).status_code
+            == 200
+        )
+
+        # Seguridad Modo Web: bloqueo de ejecución de comandos OS en el servidor compartido
+        assert (
+            client.post(
+                "/api/download/magnet",
+                json={"uri": "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567"},
+                headers=h_ismael,
+            ).status_code
+            == 403
+        )
+        assert (
+            client.post(
+                "/api/dependencies/install",
+                json={"package_ids": ["Microsoft.DirectX"]},
+                headers=h_ismael,
+            ).status_code
+            == 403
+        )
+
+        # Cerrar sesión y volver a iniciar sesión: cada usuario conserva intactos SUS propios favoritos
+        client.post("/api/auth/logout", headers=h_ismael)
+        relogin_ismael = client.post(
+            "/api/auth/login",
+            json={"username": "ismael", "password": "supersecret1"},
+        )
+        assert relogin_ismael.status_code == 200
+        new_h_ismael = {"Authorization": f"Bearer {relogin_ismael.json()['token']}"}
+        client.cookies.clear()
+
+        bm_ismael = client.get("/api/bookmarks", headers=new_h_ismael).json()["items"]
+        cal_ismael = client.get("/api/calendar/favorites", headers=new_h_ismael).json()["items"]
+        assert [b["clean_title"] for b in bm_ismael] == ["Portal 2: Complete Edition"]
+        assert [c["title"] for c in cal_ismael] == ["Grand Theft Auto VI"]
+
+        bm_alex = client.get("/api/bookmarks", headers=h_alex).json()["items"]
+        cal_alex = client.get("/api/calendar/favorites", headers=h_alex).json()["items"]
+        assert [b["clean_title"] for b in bm_alex] == ["Hollow Knight"]
+        assert [c["title"] for c in cal_alex] == ["The Duskbloods"]
+
+    # 8) Simular reinicio completo de contenedor efímero (Render / HF Spaces) y restauración Cloud
+    snapshot = database.export_persistent_state()
+    fresh_db = isolated_env / "data" / "restarted_container.db"
+    monkeypatch.setattr(settings, "DB_PATH", fresh_db)
+    database.init_db()
+    assert database.count_users() == 0
+
+    database.import_persistent_state(snapshot)
+    assert database.count_users() == 2
+
+    with TestClient(app) as client2:
+        r_login_after_wipe = client2.post(
+            "/api/auth/login",
+            json={"username": "alex", "password": "amigoPassword2"},
+        )
+        assert r_login_after_wipe.status_code == 200
+        h_alex_restored = {"Authorization": f"Bearer {r_login_after_wipe.json()['token']}"}
+        client2.cookies.clear()
+
+        restored_bm = client2.get("/api/bookmarks", headers=h_alex_restored).json()["items"]
+        restored_cal = client2.get("/api/calendar/favorites", headers=h_alex_restored).json()["items"]
+        assert [b["clean_title"] for b in restored_bm] == ["Hollow Knight"]
+        assert [c["title"] for c in restored_cal] == ["The Duskbloods"]
+
 
 

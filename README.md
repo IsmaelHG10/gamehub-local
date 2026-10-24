@@ -1,10 +1,18 @@
-# 🎮 GameHub Local
+# 🎮 GameHub (Escritorio Local + Web Cloud Multi-Usuario)
 
-Tu centro de mando personal y ligero en Windows para seguir **novedades de lanzamientos**, buscar juegos en múltiples fuentes con **portadas automáticas de Steam**, enviar descargas en **1 clic** (*Magnet* o *JDownloader 2*) e instalar todas las **dependencias esenciales de PC Gaming** mediante `winget`.
+Tu centro de mando personal y compartido para seguir **novedades de lanzamientos**, buscar juegos en múltiples fuentes con **portadas automáticas de Steam**, consultar el **calendario multi-plataforma (PC, Switch 2, PS5, Xbox Series, Switch)**, enviar descargas en **1 clic** (*Magnet* o *JDownloader 2*) e instalar todas las **dependencias esenciales de PC Gaming** mediante `winget`.
 
 ---
 
-## 🚀 Cómo abrirlo (1 clic)
+## 🌐 Nuevo: Modo Web Cloud Gratis (0 €) + Cuentas de Usuario
+
+¿Quieres compartir GameHub con tus amigos para que cada uno entre desde su casa con su propia cuenta y conserve sus favoritos?
+- Incluye **registro e inicio de sesión** (`PBKDF2-SHA256` + sesiones firmadas `HMAC`), código de invitación opcional (`GAMEHUB_INVITE_CODE`) y **favoritos persistentes por usuario**.
+- Consulta la guía paso a paso en **[`DESPLIEGUE_WEB_GRATIS.md`](DESPLIEGUE_WEB_GRATIS.md)** para publicarlo 24/7 a **coste 0 €** en **Render** o **Hugging Face Spaces (Docker)**.
+
+---
+
+## 🚀 Cómo abrirlo en tu PC (1 clic)
 
 Haz doble clic en **`Iniciar_GameHub.bat`**.
 
