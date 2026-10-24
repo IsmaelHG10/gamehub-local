@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated_at": 1792874601.7396429,
+  "updated_at": 1792874603.0584676,
   "users": [
     {
       "id": 1,
@@ -12,23 +12,7 @@
     }
   ],
   "user_bookmarks": [],
-  "user_calendar_favorites": [
-    {
-      "user_id": 1,
-      "appid": -997112087,
-      "title": "The Legend of Zelda: Ocarina of Time",
-      "release_date": "2026-11-05",
-      "precision": "day",
-      "window_label": "5 Noviembre 2026",
-      "genres": "[\"Aventura\", \"Acción\"]",
-      "platforms": "[\"Switch 2\"]",
-      "poster_url": "https://www.nintendo.com/eu/media/images/assets/nintendo_switch_2_games/thelegendofzeldaocarinaoftime/banners/1x1_NSwitch2_TloZOcarinaOfTime_UK_en_image500w.jpg",
-      "header_url": "https://www.nintendo.com/eu/media/images/assets/nintendo_switch_2_games/thelegendofzeldaocarinaoftime/banners/16x9_PDP_NSwitch2_TloZOcarinaOfTime_AnniLogo_image500w.jpg",
-      "store_url": "https://www.nintendo.com/es-es/Juegos/Juegos-de-Nintendo-Switch-2/The-Legend-of-Zelda-Ocarina-of-Time-3115664.html",
-      "summary": "Descubre una aventura que trasciende el tiempo en The Legend of Zelda: Ocarina of Time para Nintendo Switch 2, un clásico rediseñado para una nueva era.",
-      "saved_at": 1792874601.7372646
-    }
-  ],
+  "user_calendar_favorites": [],
   "sources": [
     {
       "id": "regalos-pc-gratis",
