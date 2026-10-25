@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated_at": 1792874606.923383,
+  "updated_at": 1792896576.7965853,
   "users": [
     {
       "id": 1,
@@ -101,6 +101,258 @@
       "url": "config/demo_catalog.json",
       "search_url_template": "",
       "enabled": false
+    },
+    {
+      "id": "zeigames",
+      "name": "Zeigames",
+      "type": "search_url",
+      "category": "Descarga Directa",
+      "url": "https://zeigames.com",
+      "search_url_template": "https://zeigames.com/?s={query}",
+      "enabled": true
+    },
+    {
+      "id": "scnlog-me",
+      "name": "Scnlog.me",
+      "type": "rss",
+      "category": "Descarga Directa",
+      "url": "https://scnlog.me/feed/",
+      "search_url_template": "https://scnlog.me/?s={query}",
+      "enabled": true
+    },
+    {
+      "id": "scene-rls",
+      "name": "Scene Rls",
+      "type": "search_url",
+      "category": "Descarga Directa",
+      "url": "https://scene-rls.net",
+      "search_url_template": "https://scene-rls.net/?s={query}",
+      "enabled": true
+    },
+    {
+      "id": "steamrip",
+      "name": "SteamRIP",
+      "type": "wp_api",
+      "category": "Descarga Directa",
+      "url": "https://steamrip.com",
+      "search_url_template": "https://steamrip.com/?s={query}",
+      "enabled": true
+    },
+    {
+      "id": "releasebb",
+      "name": "ReleaseBB",
+      "type": "rss",
+      "category": "Descarga Directa",
+      "url": "https://rlsbb.ru/feed/",
+      "search_url_template": "https://rlsbb.ru/?s={query}",
+      "enabled": true
+    },
+    {
+      "id": "elamigos-official-site",
+      "name": "ElAmigos official site",
+      "type": "search_url",
+      "category": "Repacks",
+      "url": "https://elamigos.site",
+      "search_url_template": "https://elamigos.site/?s={query}",
+      "enabled": true
+    },
+    {
+      "id": "ova-games",
+      "name": "Ova Games",
+      "type": "wp_api",
+      "category": "Descarga Directa",
+      "url": "https://www.ovagames.com",
+      "search_url_template": "https://www.ovagames.com/?s={query}",
+      "enabled": true
+    },
+    {
+      "id": "torrminatorr-com",
+      "name": "Torrminatorr.Com",
+      "type": "search_url",
+      "category": "Descarga Directa",
+      "url": "https://torrminatorr.com",
+      "search_url_template": "https://torrminatorr.com/?s={query}",
+      "enabled": true
+    },
+    {
+      "id": "gog-revived",
+      "name": "GoG Revived",
+      "type": "rss",
+      "category": "Retro / DRM-Free",
+      "url": "https://gog-rev.com/rss.xml",
+      "search_url_template": "https://gog-rev.com/?s={query}",
+      "enabled": true
+    },
+    {
+      "id": "online-fix",
+      "name": "Online-Fix - Запуск игр по сети",
+      "type": "rss",
+      "category": "Descarga Directa",
+      "url": "https://online-fix.me/rss.xml",
+      "search_url_template": "https://online-fix.me/?s={query}",
+      "enabled": true
+    },
+    {
+      "id": "gog-archive",
+      "name": "GOG Archive",
+      "type": "search_url",
+      "category": "Retro / DRM-Free",
+      "url": "https://gog.squid.wtf",
+      "search_url_template": "https://gog.squid.wtf/?s={query}",
+      "enabled": true
+    },
+    {
+      "id": "scene-cat",
+      "name": "scene.cat",
+      "type": "search_url",
+      "category": "Descarga Directa",
+      "url": "https://scene.cat",
+      "search_url_template": "https://scene.cat/?s={query}",
+      "enabled": true
+    },
+    {
+      "id": "free-pc-games",
+      "name": "Free PC Games",
+      "type": "search_url",
+      "category": "Descarga Directa",
+      "url": "https://gamebounty.world",
+      "search_url_template": "https://gamebounty.world/?s={query}",
+      "enabled": true
+    },
+    {
+      "id": "games-4-you",
+      "name": "games 4 you",
+      "type": "search_url",
+      "category": "Descarga Directa",
+      "url": "https://g4u.to",
+      "search_url_template": "https://g4u.to/?s={query}",
+      "enabled": true
+    },
+    {
+      "id": "gload-to",
+      "name": "GLOAD.to",
+      "type": "wp_api",
+      "category": "Descarga Directa",
+      "url": "https://gload.to",
+      "search_url_template": "https://gload.to/?s={query}",
+      "enabled": true
+    },
+    {
+      "id": "astralgames-pre",
+      "name": "AstralGames ~ Pre",
+      "type": "search_url",
+      "category": "Descarga Directa",
+      "url": "https://astralgames.net",
+      "search_url_template": "https://astralgames.net/?s={query}",
+      "enabled": true
+    },
+    {
+      "id": "fuente",
+      "name": "Главная",
+      "type": "search_url",
+      "category": "Descarga Directa",
+      "url": "https://tapochek.net",
+      "search_url_template": "https://tapochek.net/?s={query}",
+      "enabled": true
+    },
+    {
+      "id": "cracked",
+      "name": "Cracked",
+      "type": "search_url",
+      "category": "Descarga Directa",
+      "url": "https://cracked-games.org",
+      "search_url_template": "https://cracked-games.org/?s={query}",
+      "enabled": true
+    },
+    {
+      "id": "retro-exo",
+      "name": "Retro eXo",
+      "type": "search_url",
+      "category": "Retro / DRM-Free",
+      "url": "https://www.retro-exo.com",
+      "search_url_template": "https://www.retro-exo.com/?s={query}",
+      "enabled": true
+    },
+    {
+      "id": "oldgamesdownload",
+      "name": "Oldgamesdownload",
+      "type": "search_url",
+      "category": "Retro / DRM-Free",
+      "url": "https://oldgamesdownload.com",
+      "search_url_template": "https://oldgamesdownload.com/?s={query}",
+      "enabled": true
+    },
+    {
+      "id": "my-abandonware",
+      "name": "My Abandonware",
+      "type": "search_url",
+      "category": "Retro / DRM-Free",
+      "url": "https://www.myabandonware.com",
+      "search_url_template": "https://www.myabandonware.com/?s={query}",
+      "enabled": true
+    },
+    {
+      "id": "ankergames",
+      "name": "AnkerGames",
+      "type": "search_url",
+      "category": "Descarga Directa",
+      "url": "https://ankergames.net",
+      "search_url_template": "https://ankergames.net/?s={query}",
+      "enabled": true
+    },
+    {
+      "id": "appnetica",
+      "name": "Appnetica",
+      "type": "search_url",
+      "category": "Descarga Directa",
+      "url": "https://appnetica.com",
+      "search_url_template": "https://appnetica.com/?s={query}",
+      "enabled": true
+    },
+    {
+      "id": "internet-archive-digital-library-of-free",
+      "name": "Internet Archive: Digital Library of Free & Borrowable Texts, Movies, Music & Wayback Machine",
+      "type": "search_url",
+      "category": "Retro / DRM-Free",
+      "url": "https://archive.org",
+      "search_url_template": "https://archive.org/?s={query}",
+      "enabled": true
+    },
+    {
+      "id": "abandonware-games",
+      "name": "Abandonware Games",
+      "type": "search_url",
+      "category": "Retro / DRM-Free",
+      "url": "https://abandonwaregames.net",
+      "search_url_template": "https://abandonwaregames.net/?s={query}",
+      "enabled": true
+    },
+    {
+      "id": "rustorka",
+      "name": "Rustorka",
+      "type": "search_url",
+      "category": "Descarga Directa",
+      "url": "https://rustorka.com",
+      "search_url_template": "https://rustorka.com/?s={query}",
+      "enabled": true
+    },
+    {
+      "id": "rutracker-org",
+      "name": "RuTracker.org",
+      "type": "search_url",
+      "category": "Descarga Directa",
+      "url": "https://rutracker.org",
+      "search_url_template": "https://rutracker.org/?s={query}",
+      "enabled": true
+    },
+    {
+      "id": "cs",
+      "name": "Cs",
+      "type": "search_url",
+      "category": "Descarga Directa",
+      "url": "https://cs.rin.ru",
+      "search_url_template": "https://cs.rin.ru/?s={query}",
+      "enabled": true
     }
   ]
 }
