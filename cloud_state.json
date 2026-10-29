@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated_at": 1792896576.7965853,
+  "updated_at": 1793243037.4557917,
   "users": [
     {
       "id": 1,
@@ -352,6 +352,15 @@
       "category": "Descarga Directa",
       "url": "https://cs.rin.ru",
       "search_url_template": "https://cs.rin.ru/?s={query}",
+      "enabled": true
+    },
+    {
+      "id": "pivigames",
+      "name": "PiviGames",
+      "type": "wp_api",
+      "category": "Descarga Directa",
+      "url": "https://pivigames.blog",
+      "search_url_template": "https://pivigames.blog/?s={query}",
       "enabled": true
     }
   ]
