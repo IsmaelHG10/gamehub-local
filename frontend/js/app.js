@@ -13,6 +13,8 @@ import {
   relativeTime,
   renderPlatformBadges,
   renderPosterSkeletons,
+  safeEncode,
+  sanitizeUnicode,
   setStoredToken,
   splitUris,
   state,
@@ -37,7 +39,7 @@ function parseHashRoute() {
 }
 
 function writeHashRoute(view, query = "") {
-  const target = view === "search" && query ? `#search?q=${encodeURIComponent(query)}` : `#${view}`;
+  const target = view === "search" && query ? `#search?q=${safeEncode(query)}` : `#${view}`;
   if (window.location.hash !== target) {
     window.history.replaceState(null, "", target);
   }
@@ -343,7 +345,7 @@ export async function runSearch(query) {
     container.innerHTML = `<div class="poster-grid">${renderPosterSkeletons(6)}</div>`;
   }
   try {
-    state.searchData = await api(`/api/search?q=${encodeURIComponent(q)}`);
+    state.searchData = await api(`/api/search?q=${safeEncode(q)}`);
     renderSearchResults();
   } catch (err) {
     toast(err.message, "err");
@@ -506,7 +508,7 @@ export async function openDetailDrawer(item) {
   const heroBg = item.steam_info?.header_url || item.image_url || "";
   const calItem = item.cal_item || null;
   const gcal = calItem ? googleCalendarUrl(calItem) : "";
-  const ytTrailer = `https://www.youtube.com/results?search_query=${encodeURIComponent(title + " official trailer")}`;
+  const ytTrailer = `https://www.youtube.com/results?search_query=${safeEncode(title + " official trailer")}`;
 
   $("#drawer-hero").style.backgroundImage =
     heroBg && /^https?:\/\//i.test(heroBg) ? `url("${heroBg.replace(/"/g, "%22")}")` : "none";
@@ -829,7 +831,7 @@ function renderUserSessionUI() {
   const u = state.user;
 
   if (u) {
-    const initials = (u.display_name || u.username || "U").slice(0, 2).toUpperCase();
+    const initials = Array.from(sanitizeUnicode(u.display_name || u.username || "U")).slice(0, 2).join("").toUpperCase();
     if (box) {
       box.innerHTML = `
         <div class="user-avatar" title="${esc(u.display_name)} (@${esc(u.username)})">${esc(initials)}</div>

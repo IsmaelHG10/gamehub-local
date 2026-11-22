@@ -10,6 +10,7 @@ import {
   hooks,
   originUrl,
   renderPlatformBadges,
+  safeEncode,
   sourceInitials,
   state,
   svgPlaceholder,
@@ -26,7 +27,7 @@ const TYPE_META = {
 function buildExternalSearchUrl(source, query) {
   const tpl = source?.search_url_template || "";
   if (!tpl || !tpl.includes("{query}")) return "";
-  return tpl.replace("{query}", encodeURIComponent(query.trim()).replace(/%20/g, "+"));
+  return tpl.replace("{query}", safeEncode(query.trim()).replace(/%20/g, "+"));
 }
 
 function siteHomepage(source) {

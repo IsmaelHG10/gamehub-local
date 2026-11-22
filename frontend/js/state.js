@@ -142,16 +142,44 @@ export async function api(path, opts = {}) {
   return data;
 }
 
+export function sanitizeUnicode(str) {
+  const s = String(str ?? "");
+  if (typeof s.toWellFormed === "function") return s.toWellFormed();
+  let out = "";
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c >= 0xd800 && c <= 0xdbff) {
+      const next = i + 1 < s.length ? s.charCodeAt(i + 1) : 0;
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        out += s[i] + s[i + 1];
+        i++;
+      }
+    } else if (c < 0xdc00 || c > 0xdfff) {
+      out += s[i];
+    }
+  }
+  return out;
+}
+
+export function safeEncode(str) {
+  return encodeURIComponent(sanitizeUnicode(str));
+}
+
 export function svgPlaceholder(title) {
-  const clean = (title || "Game").trim();
+  const clean = sanitizeUnicode(title || "Game").trim() || "Game";
+  const words = clean
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
   const initials =
-    clean
-      .split(/\s+/)
+    words
       .slice(0, 2)
-      .map((w) => w[0] || "")
+      .map((w) => Array.from(w)[0] || "")
       .join("")
       .toUpperCase() || "GH";
-  const shortTitle = clean.length > 26 ? clean.slice(0, 24) + "…" : clean;
+  const chars = Array.from(clean);
+  const shortTitle = chars.length > 26 ? chars.slice(0, 24).join("") + "…" : clean;
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="600" viewBox="0 0 400 600">
     <defs>
       <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
@@ -165,7 +193,11 @@ export function svgPlaceholder(title) {
     <text x="200" y="253" text-anchor="middle" fill="#38bdf8" font-family="Plus Jakarta Sans, Segoe UI, sans-serif" font-size="46" font-weight="800">${esc(initials)}</text>
     <text x="200" y="368" text-anchor="middle" fill="#cbd5e1" font-family="Inter, Segoe UI, sans-serif" font-size="19" font-weight="600">${esc(shortTitle)}</text>
   </svg>`;
-  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+  try {
+    return `data:image/svg+xml;charset=utf-8,${safeEncode(svg)}`;
+  } catch {
+    return `data:image/svg+xml;charset=utf-8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="400" height="600"><rect width="400" height="600" fill="#0b1120"/></svg>')}`;
+  }
 }
 
 export function posterChain(item) {
@@ -213,12 +245,13 @@ export function faviconUrl(rawUrl) {
 
 export function sourceInitials(name) {
   return (
-    String(name || "GH")
-      .replace(/[^a-zA-Z0-9\s]/g, " ")
+    sanitizeUnicode(name || "GH")
+      .replace(/[^\p{L}\p{N}\s]/gu, " ")
       .trim()
       .split(/\s+/)
+      .filter(Boolean)
       .slice(0, 2)
-      .map((w) => w[0] || "")
+      .map((w) => Array.from(w)[0] || "")
       .join("")
       .toUpperCase() || "GH"
   );
