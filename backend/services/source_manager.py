@@ -13,26 +13,66 @@ from ..adapters import ADAPTERS, SOURCE_TYPES, json_index, search_url
 from ..adapters.base import new_client
 from . import steam_enricher
 from .title_cleaner import group_key
+from .url_safety import validate_external_url, validate_local_json_path
 
 _config_lock = threading.Lock()
 _sync_lock = asyncio.Lock()
+_sources_cache: list[dict] | None = None
+_sources_cache_at: float = 0.0
+_SOURCES_CACHE_TTL = 20.0
 
 
 def _slugify(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", (text or "").lower()).strip("-")[:40] or "fuente"
 
 
-def load_sources() -> list[dict]:
+def _read_sources_file(path) -> list[dict]:
+    if not path.exists():
+        return []
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    sources = raw.get("sources") if isinstance(raw, dict) else raw
+    return [s for s in (sources or []) if isinstance(s, dict) and s.get("id")]
+
+
+def clear_sources_cache() -> None:
+    global _sources_cache, _sources_cache_at
     with _config_lock:
-        if not settings.SOURCES_FILE.exists():
-            return []
-        raw = json.loads(settings.SOURCES_FILE.read_text(encoding="utf-8"))
-        sources = raw.get("sources") if isinstance(raw, dict) else raw
-        return [s for s in (sources or []) if isinstance(s, dict) and s.get("id")]
+        _sources_cache = None
+        _sources_cache_at = 0.0
+
+
+def load_sources() -> list[dict]:
+    global _sources_cache, _sources_cache_at
+    with _config_lock:
+        if settings.use_turso():
+            now = time.time()
+            if _sources_cache is not None and (now - _sources_cache_at) < _SOURCES_CACHE_TTL:
+                return [dict(s) for s in _sources_cache]
+            stored = database.config_get("sources")
+            if isinstance(stored, list):
+                cleaned = [s for s in stored if isinstance(s, dict) and s.get("id")]
+            else:
+                # Primera ejecución en Turso: sembrar con las fuentes iniciales del repo
+                seed_path = settings.BUNDLED_CONFIG_DIR / "sources.json"
+                cleaned = _read_sources_file(seed_path) or _read_sources_file(settings.SOURCES_FILE)
+                if cleaned:
+                    database.config_set("sources", cleaned)
+            _sources_cache = [dict(s) for s in cleaned]
+            _sources_cache_at = now
+            return [dict(s) for s in cleaned]
+
+        return _read_sources_file(settings.SOURCES_FILE)
 
 
 def save_sources(sources: list[dict]) -> None:
+    global _sources_cache, _sources_cache_at
     with _config_lock:
+        if settings.use_turso():
+            database.config_set("sources", sources)
+            _sources_cache = [dict(s) for s in sources]
+            _sources_cache_at = time.time()
+            return
+
         settings.SOURCES_FILE.parent.mkdir(parents=True, exist_ok=True)
         tmp = settings.SOURCES_FILE.with_suffix(".json.tmp")
         tmp.write_text(
@@ -60,6 +100,16 @@ def get_sources_with_stats() -> list[dict]:
     return enriched
 
 
+def _validate_source_urls(stype: str, url: str, template: str) -> None:
+    if url:
+        if stype == json_index.TYPE and json_index.is_local_path(url):
+            validate_local_json_path(url)
+        else:
+            validate_external_url(url, resolve_dns=False)
+    if template:
+        validate_external_url(template.replace("{query}", "test"), resolve_dns=False)
+
+
 def upsert_source(payload: dict) -> dict:
     stype = payload.get("type") or "rss"
     if stype not in SOURCE_TYPES:
@@ -73,6 +123,7 @@ def upsert_source(payload: dict) -> dict:
         raise ValueError("Las fuentes de tipo redirección requieren una plantilla con {query}")
     if stype != "search_url" and not url:
         raise ValueError("La URL principal de la fuente es obligatoria")
+    _validate_source_urls(stype, url, template)
 
     sources = load_sources()
     existing_ids = {s["id"] for s in sources}
@@ -93,6 +144,7 @@ def upsert_source(payload: dict) -> dict:
         "category": (payload.get("category") or "Descarga Directa").strip(),
         "url": url,
         "search_url_template": template,
+        "notes": (payload.get("notes") or "").strip()[:200],
         "enabled": bool(payload.get("enabled", True)),
     }
 
@@ -118,23 +170,32 @@ def import_sources(new_sources: list[dict], merge: bool = True) -> dict:
     current = load_sources() if merge else []
     by_id = {s["id"]: s for s in current}
     added = 0
+    skipped = 0
     for raw in new_sources:
         if not isinstance(raw, dict) or not raw.get("name"):
             continue
         stype = raw.get("type") if raw.get("type") in SOURCE_TYPES else "rss"
+        url = str(raw.get("url") or "").strip()
+        template = str(raw.get("search_url_template") or "").strip()
+        try:
+            _validate_source_urls(stype, url, template)
+        except ValueError:
+            skipped += 1
+            continue
         sid = _slugify(raw.get("id") or raw["name"])
         by_id[sid] = {
             "id": sid,
             "name": str(raw["name"]).strip(),
             "type": stype,
             "category": str(raw.get("category") or "Descarga Directa").strip(),
-            "url": str(raw.get("url") or "").strip(),
-            "search_url_template": str(raw.get("search_url_template") or "").strip(),
+            "url": url,
+            "search_url_template": template,
+            "notes": str(raw.get("notes") or "").strip()[:200],
             "enabled": bool(raw.get("enabled", True)),
         }
         added += 1
     save_sources(list(by_id.values()))
-    return {"imported": added, "total": len(by_id)}
+    return {"imported": added, "skipped": skipped, "total": len(by_id)}
 
 
 async def sync_single_source(source: dict, client) -> dict:
@@ -196,6 +257,7 @@ async def probe_source(payload: dict) -> dict:
         "search_url_template": payload.get("search_url_template") or "",
     }
     t0 = time.perf_counter()
+    _validate_source_urls(stype, temp_source["url"], temp_source["search_url_template"])
     if stype == search_url.TYPE:
         link = search_url.external_link(temp_source, "Hollow Knight")
         if not link:
@@ -275,7 +337,8 @@ async def unified_search(query: str, enrich: bool = True, user_id: int | None = 
 
         items = list(merged_map.values())
         if enrich and items:
-            await steam_enricher.enrich_items(items, client, max_network_lookups=20)
+            max_lookups = 10 if settings.IS_SERVERLESS else 20
+            await steam_enricher.enrich_items(items, client, max_network_lookups=max_lookups)
 
     bmarks = database.bookmark_ids(user_id=user_id)
     for it in items:

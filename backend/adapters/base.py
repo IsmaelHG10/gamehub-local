@@ -146,9 +146,13 @@ def origin_of(url: str) -> str:
 
 
 def new_client(timeout: float = 15.0, transport: httpx.AsyncBaseTransport | None = None) -> httpx.AsyncClient:
+    from ..services.url_safety import ssrf_request_hook
+
+    hooks = {"request": [ssrf_request_hook]} if transport is None else None
     return httpx.AsyncClient(
         headers=settings.BROWSER_HEADERS,
         follow_redirects=True,
         timeout=httpx.Timeout(timeout, connect=8.0),
         transport=transport,
+        event_hooks=hooks,
     )

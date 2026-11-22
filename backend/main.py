@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import subprocess
 import sys
+import time
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -74,8 +76,16 @@ async def _serverless_state_middleware(request: Request, call_next):
     path = request.url.path
     if path.startswith("/api/") and path != "/api/ping":
         database.init_db()
-        await cloud_sync.ensure_pulled()
-    return await call_next(request)
+        if not settings.use_turso():
+            await cloud_sync.ensure_pulled()
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    if path.startswith(("/css/", "/js/")):
+        response.headers.setdefault("Cache-Control", "public, max-age=300, stale-while-revalidate=86400")
+    return response
 
 
 # --------------------------------------------------------------------------- Modelos Pydantic
@@ -99,6 +109,7 @@ class SourcePayload(BaseModel):
     category: str = "Descarga Directa"
     url: str = ""
     search_url_template: str = ""
+    notes: str = ""
     enabled: bool = True
     sync_now: bool = True
 
@@ -176,13 +187,16 @@ async def api_auth_status(request: Request):
         "require_auth": settings.REQUIRE_AUTH,
         "invite_code_required": bool(settings.INVITE_CODE),
         "has_any_users": database.count_users() > 0,
+        "storage": database.storage_info(),
         "cloud_sync": cloud_sync.get_status(),
         "user": user,
     }
 
 
 @app.post("/api/auth/register")
-async def api_auth_register(req: RegisterRequest, response: Response):
+async def api_auth_register(req: RegisterRequest, request: Request, response: Response):
+    ip = auth.client_ip_from_request(request)
+    auth.check_auth_rate_limit(ip)
     try:
         user = auth.register_user(
             username=req.username,
@@ -191,8 +205,10 @@ async def api_auth_register(req: RegisterRequest, response: Response):
             invite_code=req.invite_code,
         )
     except ValueError as exc:
+        auth.record_auth_failure(ip)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    auth.clear_auth_failures(ip)
     token = auth.create_session_token(user)
     _set_auth_cookie(response, token)
     await cloud_sync.persist_state()
@@ -200,12 +216,16 @@ async def api_auth_register(req: RegisterRequest, response: Response):
 
 
 @app.post("/api/auth/login")
-async def api_auth_login(req: LoginRequest, response: Response):
+async def api_auth_login(req: LoginRequest, request: Request, response: Response):
+    ip = auth.client_ip_from_request(request)
+    auth.check_auth_rate_limit(ip)
     try:
         user = auth.authenticate_user(username=req.username, password=req.password)
     except ValueError as exc:
+        auth.record_auth_failure(ip)
         raise HTTPException(status_code=401, detail=str(exc)) from exc
 
+    auth.clear_auth_failures(ip)
     token = auth.create_session_token(user)
     _set_auth_cookie(response, token)
     return {"ok": True, "token": token, "user": user}
@@ -244,9 +264,69 @@ async def api_health(request: Request):
         "sources_total": len(sources),
         "sources_enabled": sum(1 for s in sources if s.get("enabled", True)),
         "jdownloader": jd,
+        "storage": database.storage_info(),
         "cloud_sync": cloud_sync.get_status(),
         "stats": database.db_stats(user_id=_uid(user)),
     }
+
+
+# --------------------------------------------------------------------------- Cron / Sincronización Programada (Vercel Cron & GitHub Actions)
+
+def _authorize_cron_request(request: Request, secret: str | None = None) -> None:
+    """Autoriza peticiones de cron mediante CRON_SECRET, sesión de Admin o modo Local."""
+    configured = settings.CRON_SECRET
+    if configured:
+        auth_header = (request.headers.get("Authorization") or "").strip()
+        bearer = auth_header[7:].strip() if auth_header.lower().startswith("bearer ") else ""
+        provided = bearer or (secret or "").strip()
+        if provided and hmac.compare_digest(provided, configured):
+            return
+
+    user = auth.get_optional_user(request)
+    if user and user.get("is_admin"):
+        return
+    if not settings.IS_WEB_MODE and not settings.REQUIRE_AUTH and not configured:
+        return
+    raise HTTPException(
+        status_code=401,
+        detail="No autorizado. Configura CRON_SECRET o inicia sesión como administrador.",
+    )
+
+
+@app.api_route("/api/cron/sync", methods=["GET", "POST"])
+async def api_cron_sync(
+    request: Request,
+    scope: str = Query(default="all", pattern="^(all|feeds|calendar)$"),
+    secret: str | None = Query(default=None),
+):
+    _authorize_cron_request(request, secret=secret)
+    t0 = time.perf_counter()
+    report: dict[str, Any] = {
+        "ok": True,
+        "scope": scope,
+        "storage": database.storage_info(),
+    }
+
+    if scope in ("all", "feeds"):
+        feed_res = await source_manager.sync_sources()
+        # Pre-calentar portadas de Steam en la base persistente para las novedades recientes
+        active_ids = [s["id"] for s in source_manager.load_sources() if s.get("enabled", True)]
+        recent_items, _ = database.query_latest(source_ids=active_ids, limit=48, offset=0)
+        enriched_count = 0
+        if recent_items:
+            try:
+                async with new_client(timeout=10.0) as client:
+                    await steam_enricher.enrich_items(recent_items, client, max_network_lookups=36)
+                    enriched_count = sum(1 for it in recent_items if it.get("steam_info"))
+            except Exception:
+                pass
+        report["feeds"] = {**feed_res, "steam_enriched": enriched_count}
+
+    if scope in ("all", "calendar"):
+        report["calendar"] = await release_calendar.sync_calendar(force=True, full_enrich=True)
+
+    report["duration_ms"] = int((time.perf_counter() - t0) * 1000)
+    return report
 
 
 # --------------------------------------------------------------------------- Novedades y Búsqueda
@@ -289,8 +369,9 @@ async def api_latest_releases(
             )
 
     if enrich and items:
+        max_lookups = 8 if settings.IS_SERVERLESS else 20
         async with new_client(timeout=8.0) as client:
-            await steam_enricher.enrich_items(items, client, max_network_lookups=20)
+            await steam_enricher.enrich_items(items, client, max_network_lookups=max_lookups)
 
     bmarks = database.bookmark_ids(user_id=_uid(user))
     for it in items:
@@ -500,25 +581,42 @@ async def api_autodetect_batch(
     req: BatchAutodetectRequest,
     _admin: dict | None = Depends(auth.require_admin_or_local),
 ):
-    cleaned_urls = [u.strip() for u in req.urls if u and u.strip() and not u.strip().startswith("#")]
-    if not cleaned_urls:
+    cleaned_lines = [u.strip() for u in req.urls if u and u.strip() and not u.strip().startswith("#")]
+    if not cleaned_lines:
         raise HTTPException(status_code=400, detail="No se encontraron URLs válidas en la lista")
+
+    def _parse_batch_line(line: str) -> tuple[str, str | None, str | None]:
+        # Permite pegar solo "https://sitio.com" o "Nombre | https://sitio.com | Categoría"
+        if "|" in line:
+            parts = [p.strip() for p in line.split("|")]
+            if len(parts) >= 2 and ("." in parts[1] or "://" in parts[1]):
+                custom_name = parts[0] or None
+                target_url = parts[1]
+                custom_cat = parts[2] if len(parts) >= 3 and parts[2] else None
+                return target_url, custom_name, custom_cat
+        return line, None, None
 
     sem = asyncio.Semaphore(5)
     async with new_client(timeout=10.0) as client:
-        async def _detect_one(u: str) -> dict:
+        async def _detect_one(raw_line: str) -> dict:
+            target_url, custom_name, custom_cat = _parse_batch_line(raw_line)
             async with sem:
                 try:
-                    res = await autodetect_url(u, client=client)
+                    res = await autodetect_url(target_url, client=client)
+                    if custom_name:
+                        res["name"] = custom_name
+                        res["id"] = ""
+                    if custom_cat:
+                        res["category"] = custom_cat
                     if req.auto_save:
                         saved = source_manager.upsert_source(res)
                         res["id"] = saved["id"]
                         res["saved"] = True
-                    return {"ok": True, "input": u, "source": res}
+                    return {"ok": True, "input": raw_line, "source": res}
                 except Exception as exc:
-                    return {"ok": False, "input": u, "error": str(exc)}
+                    return {"ok": False, "input": raw_line, "error": str(exc)}
 
-        results = await asyncio.gather(*(_detect_one(u) for u in cleaned_urls[:30]))
+        results = await asyncio.gather(*(_detect_one(u) for u in cleaned_lines[:40]))
 
     if req.auto_save and any(r["ok"] for r in results):
         await cloud_sync.persist_state()

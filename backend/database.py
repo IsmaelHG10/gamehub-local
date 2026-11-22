@@ -1,4 +1,4 @@
-"""SQLite: caché de feeds, catálogo con índice FTS5 y caché de Steam."""
+"""SQLite / Turso (libSQL): caché de feeds, catálogo FTS5, calendario, usuarios y configuración."""
 from __future__ import annotations
 
 import json
@@ -8,152 +8,167 @@ import threading
 import time
 import unicodedata
 from contextlib import contextmanager
-from typing import Iterable, Iterator
+from typing import Any, Iterable, Iterator
 
 from . import settings
+from .turso_client import TursoConnection
 
 _init_lock = threading.Lock()
 _initialized_paths: set[str] = set()
 
-SCHEMA = """
-PRAGMA journal_mode=WAL;
+SCHEMA_STATEMENTS: tuple[str, ...] = (
+    """CREATE TABLE IF NOT EXISTS releases (
+        rowid INTEGER PRIMARY KEY,
+        id TEXT NOT NULL UNIQUE,
+        source_id TEXT NOT NULL,
+        source_name TEXT,
+        source_category TEXT,
+        raw_title TEXT NOT NULL,
+        clean_title TEXT NOT NULL,
+        published_at TEXT,
+        page_url TEXT,
+        file_size TEXT,
+        uris TEXT NOT NULL DEFAULT '[]',
+        excerpt TEXT,
+        image_url TEXT,
+        fetched_at REAL NOT NULL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_releases_source ON releases(source_id)",
+    "CREATE INDEX IF NOT EXISTS idx_releases_published ON releases(published_at DESC)",
+    """CREATE VIRTUAL TABLE IF NOT EXISTS catalog_fts USING fts5(
+        clean_title, raw_title,
+        content='releases', content_rowid='rowid',
+        tokenize='unicode61 remove_diacritics 2'
+    )""",
+    """CREATE TRIGGER IF NOT EXISTS releases_ai AFTER INSERT ON releases BEGIN
+        INSERT INTO catalog_fts(rowid, clean_title, raw_title)
+        VALUES (new.rowid, new.clean_title, new.raw_title);
+    END""",
+    """CREATE TRIGGER IF NOT EXISTS releases_ad AFTER DELETE ON releases BEGIN
+        INSERT INTO catalog_fts(catalog_fts, rowid, clean_title, raw_title)
+        VALUES ('delete', old.rowid, old.clean_title, old.raw_title);
+    END""",
+    """CREATE TRIGGER IF NOT EXISTS releases_au AFTER UPDATE ON releases BEGIN
+        INSERT INTO catalog_fts(catalog_fts, rowid, clean_title, raw_title)
+        VALUES ('delete', old.rowid, old.clean_title, old.raw_title);
+        INSERT INTO catalog_fts(rowid, clean_title, raw_title)
+        VALUES (new.rowid, new.clean_title, new.raw_title);
+    END""",
+    """CREATE TABLE IF NOT EXISTS steam_cache (
+        key TEXT PRIMARY KEY,
+        data TEXT,
+        expires_at REAL NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS steam_details (
+        appid INTEGER PRIMARY KEY,
+        data TEXT NOT NULL,
+        expires_at REAL NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS source_sync (
+        source_id TEXT PRIMARY KEY,
+        last_sync REAL,
+        item_count INTEGER,
+        error TEXT,
+        duration_ms INTEGER
+    )""",
+    """CREATE TABLE IF NOT EXISTS bookmarks (
+        item_id TEXT PRIMARY KEY,
+        payload TEXT NOT NULL,
+        saved_at REAL NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS calendar_events (
+        appid INTEGER PRIMARY KEY,
+        title TEXT NOT NULL,
+        release_date TEXT,
+        precision TEXT NOT NULL DEFAULT 'tba',
+        window_label TEXT,
+        is_hot INTEGER NOT NULL DEFAULT 0,
+        genres TEXT NOT NULL DEFAULT '[]',
+        platforms TEXT NOT NULL DEFAULT '[]',
+        poster_url TEXT,
+        header_url TEXT,
+        store_url TEXT,
+        summary TEXT DEFAULT '',
+        updated_at REAL NOT NULL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_cal_date ON calendar_events(release_date)",
+    "CREATE INDEX IF NOT EXISTS idx_cal_hot ON calendar_events(is_hot)",
+    """CREATE TABLE IF NOT EXISTS calendar_favorites (
+        appid INTEGER PRIMARY KEY,
+        title TEXT NOT NULL,
+        release_date TEXT,
+        precision TEXT NOT NULL DEFAULT 'tba',
+        window_label TEXT,
+        genres TEXT NOT NULL DEFAULT '[]',
+        platforms TEXT NOT NULL DEFAULT '[]',
+        poster_url TEXT,
+        header_url TEXT,
+        store_url TEXT,
+        summary TEXT DEFAULT '',
+        saved_at REAL NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS calendar_meta (
+        key TEXT PRIMARY KEY,
+        value REAL NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT NOT NULL UNIQUE,
+        display_name TEXT NOT NULL,
+        password_hash TEXT NOT NULL,
+        is_admin INTEGER NOT NULL DEFAULT 0,
+        created_at REAL NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS user_bookmarks (
+        user_id INTEGER NOT NULL,
+        item_id TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        saved_at REAL NOT NULL,
+        PRIMARY KEY (user_id, item_id)
+    )""",
+    """CREATE TABLE IF NOT EXISTS user_calendar_favorites (
+        user_id INTEGER NOT NULL,
+        appid INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        release_date TEXT,
+        precision TEXT NOT NULL DEFAULT 'tba',
+        window_label TEXT,
+        genres TEXT NOT NULL DEFAULT '[]',
+        platforms TEXT NOT NULL DEFAULT '[]',
+        poster_url TEXT,
+        header_url TEXT,
+        store_url TEXT,
+        summary TEXT DEFAULT '',
+        saved_at REAL NOT NULL,
+        PRIMARY KEY (user_id, appid)
+    )""",
+    """CREATE TABLE IF NOT EXISTS app_config (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at REAL NOT NULL
+    )""",
+)
 
-CREATE TABLE IF NOT EXISTS releases (
-    rowid INTEGER PRIMARY KEY,
-    id TEXT NOT NULL UNIQUE,
-    source_id TEXT NOT NULL,
-    source_name TEXT,
-    source_category TEXT,
-    raw_title TEXT NOT NULL,
-    clean_title TEXT NOT NULL,
-    published_at TEXT,
-    page_url TEXT,
-    file_size TEXT,
-    uris TEXT NOT NULL DEFAULT '[]',
-    excerpt TEXT,
-    image_url TEXT,
-    fetched_at REAL NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_releases_source ON releases(source_id);
-CREATE INDEX IF NOT EXISTS idx_releases_published ON releases(published_at DESC);
-
-CREATE VIRTUAL TABLE IF NOT EXISTS catalog_fts USING fts5(
-    clean_title, raw_title,
-    content='releases', content_rowid='rowid',
-    tokenize='unicode61 remove_diacritics 2'
-);
-
-CREATE TRIGGER IF NOT EXISTS releases_ai AFTER INSERT ON releases BEGIN
-    INSERT INTO catalog_fts(rowid, clean_title, raw_title)
-    VALUES (new.rowid, new.clean_title, new.raw_title);
-END;
-CREATE TRIGGER IF NOT EXISTS releases_ad AFTER DELETE ON releases BEGIN
-    INSERT INTO catalog_fts(catalog_fts, rowid, clean_title, raw_title)
-    VALUES ('delete', old.rowid, old.clean_title, old.raw_title);
-END;
-CREATE TRIGGER IF NOT EXISTS releases_au AFTER UPDATE ON releases BEGIN
-    INSERT INTO catalog_fts(catalog_fts, rowid, clean_title, raw_title)
-    VALUES ('delete', old.rowid, old.clean_title, old.raw_title);
-    INSERT INTO catalog_fts(rowid, clean_title, raw_title)
-    VALUES (new.rowid, new.clean_title, new.raw_title);
-END;
-
-CREATE TABLE IF NOT EXISTS steam_cache (
-    key TEXT PRIMARY KEY,
-    data TEXT,
-    expires_at REAL NOT NULL
-);
-CREATE TABLE IF NOT EXISTS steam_details (
-    appid INTEGER PRIMARY KEY,
-    data TEXT NOT NULL,
-    expires_at REAL NOT NULL
-);
-CREATE TABLE IF NOT EXISTS source_sync (
-    source_id TEXT PRIMARY KEY,
-    last_sync REAL,
-    item_count INTEGER,
-    error TEXT,
-    duration_ms INTEGER
-);
-CREATE TABLE IF NOT EXISTS bookmarks (
-    item_id TEXT PRIMARY KEY,
-    payload TEXT NOT NULL,
-    saved_at REAL NOT NULL
-);
-CREATE TABLE IF NOT EXISTS calendar_events (
-    appid INTEGER PRIMARY KEY,
-    title TEXT NOT NULL,
-    release_date TEXT,
-    precision TEXT NOT NULL DEFAULT 'tba',
-    window_label TEXT,
-    is_hot INTEGER NOT NULL DEFAULT 0,
-    genres TEXT NOT NULL DEFAULT '[]',
-    platforms TEXT NOT NULL DEFAULT '[]',
-    poster_url TEXT,
-    header_url TEXT,
-    store_url TEXT,
-    summary TEXT DEFAULT '',
-    updated_at REAL NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_cal_date ON calendar_events(release_date);
-CREATE INDEX IF NOT EXISTS idx_cal_hot ON calendar_events(is_hot);
-
-CREATE TABLE IF NOT EXISTS calendar_favorites (
-    appid INTEGER PRIMARY KEY,
-    title TEXT NOT NULL,
-    release_date TEXT,
-    precision TEXT NOT NULL DEFAULT 'tba',
-    window_label TEXT,
-    genres TEXT NOT NULL DEFAULT '[]',
-    platforms TEXT NOT NULL DEFAULT '[]',
-    poster_url TEXT,
-    header_url TEXT,
-    store_url TEXT,
-    summary TEXT DEFAULT '',
-    saved_at REAL NOT NULL
-);
-CREATE TABLE IF NOT EXISTS calendar_meta (
-    key TEXT PRIMARY KEY,
-    value REAL NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT NOT NULL UNIQUE,
-    display_name TEXT NOT NULL,
-    password_hash TEXT NOT NULL,
-    is_admin INTEGER NOT NULL DEFAULT 0,
-    created_at REAL NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS user_bookmarks (
-    user_id INTEGER NOT NULL,
-    item_id TEXT NOT NULL,
-    payload TEXT NOT NULL,
-    saved_at REAL NOT NULL,
-    PRIMARY KEY (user_id, item_id)
-);
-
-CREATE TABLE IF NOT EXISTS user_calendar_favorites (
-    user_id INTEGER NOT NULL,
-    appid INTEGER NOT NULL,
-    title TEXT NOT NULL,
-    release_date TEXT,
-    precision TEXT NOT NULL DEFAULT 'tba',
-    window_label TEXT,
-    genres TEXT NOT NULL DEFAULT '[]',
-    platforms TEXT NOT NULL DEFAULT '[]',
-    poster_url TEXT,
-    header_url TEXT,
-    store_url TEXT,
-    summary TEXT DEFAULT '',
-    saved_at REAL NOT NULL,
-    PRIMARY KEY (user_id, appid)
-);
-"""
+SCHEMA = "PRAGMA journal_mode=WAL;\n" + ";\n".join(SCHEMA_STATEMENTS) + ";\n"
 
 
-def _connect_raw() -> sqlite3.Connection:
+def storage_info() -> dict[str, Any]:
+    if settings.use_turso():
+        return {
+            "backend": "turso",
+            "persistent": True,
+            "serverless": settings.IS_SERVERLESS,
+        }
+    return {
+        "backend": "sqlite",
+        "persistent": not settings.IS_SERVERLESS,
+        "serverless": settings.IS_SERVERLESS,
+    }
+
+
+def _connect_raw() -> sqlite3.Connection | TursoConnection:
+    if settings.use_turso():
+        return TursoConnection(settings.TURSO_DATABASE_URL, settings.TURSO_AUTH_TOKEN)
     settings.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(settings.DB_PATH), timeout=30, check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -163,25 +178,34 @@ def _connect_raw() -> sqlite3.Connection:
 
 
 def init_db() -> None:
-    db_key = str(settings.DB_PATH.resolve())
+    using_turso = settings.use_turso()
+    db_key = (
+        f"turso:{settings.TURSO_DATABASE_URL}"
+        if using_turso
+        else f"sqlite:{settings.DB_PATH.resolve()}"
+    )
     with _init_lock:
         if db_key in _initialized_paths:
             return
         conn = _connect_raw()
         try:
-            conn.executescript(SCHEMA)
-            for tbl in ("calendar_events", "calendar_favorites"):
-                cols = {r[1] for r in conn.execute(f"PRAGMA table_info({tbl})").fetchall()}
-                if "summary" not in cols:
-                    conn.execute(f"ALTER TABLE {tbl} ADD COLUMN summary TEXT DEFAULT ''")
-            conn.commit()
+            if using_turso:
+                assert isinstance(conn, TursoConnection)
+                conn.execute_batch(SCHEMA_STATEMENTS)
+            else:
+                conn.executescript(SCHEMA)
+                for tbl in ("calendar_events", "calendar_favorites"):
+                    cols = {r[1] for r in conn.execute(f"PRAGMA table_info({tbl})").fetchall()}
+                    if "summary" not in cols:
+                        conn.execute(f"ALTER TABLE {tbl} ADD COLUMN summary TEXT DEFAULT ''")
+                conn.commit()
         finally:
             conn.close()
         _initialized_paths.add(db_key)
 
 
 @contextmanager
-def connect() -> Iterator[sqlite3.Connection]:
+def connect() -> Iterator[sqlite3.Connection | TursoConnection]:
     init_db()
     conn = _connect_raw()
     try:
@@ -189,6 +213,29 @@ def connect() -> Iterator[sqlite3.Connection]:
         conn.commit()
     finally:
         conn.close()
+
+
+# --------------------------------------------------------------------------- app_config (fuentes/ajustes persistentes)
+
+def config_get(key: str) -> Any | None:
+    with connect() as conn:
+        row = conn.execute("SELECT value FROM app_config WHERE key=?", (key,)).fetchone()
+    if not row:
+        return None
+    try:
+        return json.loads(row["value"])
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def config_set(key: str, value: Any) -> None:
+    payload = json.dumps(value, ensure_ascii=False)
+    with connect() as conn:
+        conn.execute(
+            """INSERT INTO app_config(key, value, updated_at) VALUES (?,?,?)
+               ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at""",
+            (key, payload, time.time()),
+        )
 
 
 # --------------------------------------------------------------------------- releases

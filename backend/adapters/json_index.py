@@ -7,6 +7,7 @@ from pathlib import Path
 import httpx
 
 from .. import database, settings
+from ..services.url_safety import validate_external_url, validate_local_json_path
 from .base import extract_size, make_item, to_iso
 
 TYPE = "json_index"
@@ -17,14 +18,14 @@ def is_local_path(url: str) -> bool:
 
 
 def resolve_local_path(url: str) -> Path:
-    p = Path(url.removeprefix("file:///").removeprefix("file://"))
-    return p if p.is_absolute() else (settings.ROOT_DIR / p)
+    return validate_local_json_path(url)
 
 
 async def load_raw(url: str, client: httpx.AsyncClient) -> dict:
     if is_local_path(url):
         path = resolve_local_path(url)
         return json.loads(path.read_text(encoding="utf-8-sig"))
+    validate_external_url(url, resolve_dns=True)
     r = await client.get(url, timeout=60)
     r.raise_for_status()
     return r.json()

@@ -6,8 +6,11 @@ Variables de entorno soportadas (también desde archivo .env en la raíz):
   GAMEHUB_SECRET_KEY     : Clave secreta HMAC para firmar sesiones (si no se indica en cloud, se deriva del token)
   GAMEHUB_INVITE_CODE    : Código de invitación opcional para registrar nuevas cuentas de amigos
   GAMEHUB_ADMIN_USER     : Nombre de usuario que tendrá siempre permisos de Administrador
-  GITHUB_STATE_TOKEN     : Token privado para persistir usuarios/favoritos/fuentes en la nube a coste 0
-  GITHUB_STATE_REPO      : Repositorio privado 'usuario/repo' donde guardar el estado cloud
+  TURSO_DATABASE_URL     : URL libSQL/HTTPS de Turso para BD persistente serverless (0 € · recomendada)
+  TURSO_AUTH_TOKEN       : Token de autenticación de la base de datos Turso
+  CRON_SECRET            : Token secreto para autorizar sincronizaciones automáticas en /api/cron/sync
+  GITHUB_STATE_TOKEN     : (Fallback opcional) Token GitHub si no se usa Turso
+  GITHUB_STATE_REPO      : Repositorio 'usuario/repo' para estado cloud fallback
   GITHUB_STATE_BRANCH    : Rama dedicada de estado (por defecto 'gamehub-state')
 """
 from __future__ import annotations
@@ -103,20 +106,33 @@ else:
 INVITE_CODE = os.environ.get("GAMEHUB_INVITE_CODE", "").strip()
 ADMIN_USERNAME = os.environ.get("GAMEHUB_ADMIN_USER", "").strip().lower()
 
+# Base de datos persistente serverless recomendada: Turso (libSQL HTTP, 0 € sin tarjeta)
+TURSO_DATABASE_URL = os.environ.get("TURSO_DATABASE_URL", "").strip()
+TURSO_AUTH_TOKEN = os.environ.get("TURSO_AUTH_TOKEN", "").strip()
+CRON_SECRET = os.environ.get("CRON_SECRET", "").strip()
+
 GITHUB_STATE_TOKEN = os.environ.get("GITHUB_STATE_TOKEN", "").strip()
 GITHUB_STATE_REPO = os.environ.get(
     "GITHUB_STATE_REPO",
-    "IsmaelHG10/gamehub-local" if _CLOUD_ENV_DETECTED else "",
+    "IsmaelHG10/gamehub-local" if (_CLOUD_ENV_DETECTED and GITHUB_STATE_TOKEN) else "",
 ).strip()
 GITHUB_STATE_BRANCH = os.environ.get("GITHUB_STATE_BRANCH", "gamehub-state").strip() or "gamehub-state"
+
+_PROCESS_FALLBACK_KEY = secrets.token_hex(32)
+
+
+def use_turso() -> bool:
+    return bool(TURSO_DATABASE_URL and TURSO_AUTH_TOKEN)
 
 
 def get_secret_key() -> str:
     env_key = os.environ.get("GAMEHUB_SECRET_KEY", "").strip()
     if env_key:
         return env_key
-    # Si hay GITHUB_STATE_TOKEN configurado en Cloud/Serverless, derivar clave determinista
-    # para que distintas instancias efímeras compartan siempre la misma firma de sesión
+    # En entornos Cloud/Serverless, derivar clave determinista del token persistente activo
+    # para que todas las instancias efímeras validen las mismas sesiones sin configuración extra
+    if TURSO_AUTH_TOKEN:
+        return hashlib.sha256(f"gamehub-session-hmac-v1:{TURSO_AUTH_TOKEN}".encode("utf-8")).hexdigest()
     if GITHUB_STATE_TOKEN:
         return hashlib.sha256(f"gamehub-session-hmac-v1:{GITHUB_STATE_TOKEN}".encode("utf-8")).hexdigest()
     secret_file = DATA_DIR / ".secret_key"
@@ -130,7 +146,7 @@ def get_secret_key() -> str:
         secret_file.write_text(generated, encoding="utf-8")
         return generated
     except Exception:
-        return "gamehub-fallback-ephemeral-secret-key"
+        return _PROCESS_FALLBACK_KEY
 
 
 HOST = os.environ.get("GAMEHUB_HOST", "0.0.0.0" if IS_WEB_MODE else "127.0.0.1")

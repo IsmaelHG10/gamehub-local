@@ -7,7 +7,9 @@ import hmac
 import json
 import re
 import secrets
+import threading
 import time
+from collections import deque
 
 from fastapi import HTTPException, Request
 
@@ -17,6 +19,53 @@ COOKIE_NAME = "gh_session"
 SESSION_TTL_SECONDS = 30 * 24 * 3600  # 30 días
 PBKDF2_ITERATIONS = 310_000
 USERNAME_RE = re.compile(r"^[a-zA-Z0-9_.-]{3,30}$")
+
+# Rate limiter ligero en memoria para intentos fallidos de login/registro (ventana 5 min)
+_RATE_WINDOW_SECONDS = 300.0
+_RATE_MAX_FAILURES = 20
+_rate_lock = threading.Lock()
+_auth_failures: dict[str, deque[float]] = {}
+
+
+def client_ip_from_request(request: Request) -> str:
+    forwarded = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+    if forwarded:
+        return forwarded[:64]
+    return (request.client.host if request.client else "unknown")[:64]
+
+
+def check_auth_rate_limit(client_ip: str) -> None:
+    now = time.time()
+    cutoff = now - _RATE_WINDOW_SECONDS
+    with _rate_lock:
+        bucket = _auth_failures.get(client_ip)
+        if not bucket:
+            return
+        while bucket and bucket[0] < cutoff:
+            bucket.popleft()
+        if len(bucket) >= _RATE_MAX_FAILURES:
+            raise HTTPException(
+                status_code=429,
+                detail="Demasiados intentos fallidos. Espera unos minutos antes de volver a intentarlo.",
+            )
+
+
+def record_auth_failure(client_ip: str) -> None:
+    now = time.time()
+    cutoff = now - _RATE_WINDOW_SECONDS
+    with _rate_lock:
+        bucket = _auth_failures.setdefault(client_ip, deque())
+        while bucket and bucket[0] < cutoff:
+            bucket.popleft()
+        bucket.append(now)
+
+
+def clear_auth_failures(client_ip: str | None = None) -> None:
+    with _rate_lock:
+        if client_ip is None:
+            _auth_failures.clear()
+        else:
+            _auth_failures.pop(client_ip, None)
 
 
 def _b64u_encode(raw: bytes) -> str:

@@ -34,6 +34,9 @@ _last_error: str | None = None
 
 
 def is_enabled() -> bool:
+    # Cuando Turso está activo, la base de datos ya es persistente en la nube
+    if settings.use_turso():
+        return False
     return bool(
         settings.GITHUB_STATE_TOKEN
         and settings.GITHUB_STATE_REPO
@@ -42,8 +45,19 @@ def is_enabled() -> bool:
 
 
 def get_status() -> dict:
+    if settings.use_turso():
+        return {
+            "enabled": False,
+            "mode": "turso",
+            "repo": None,
+            "branch": None,
+            "last_pull": None,
+            "last_push": None,
+            "last_error": None,
+        }
     return {
         "enabled": is_enabled(),
+        "mode": "github" if is_enabled() else "local",
         "repo": settings.GITHUB_STATE_REPO if is_enabled() else None,
         "branch": settings.GITHUB_STATE_BRANCH if is_enabled() else None,
         "last_pull": _last_pull,

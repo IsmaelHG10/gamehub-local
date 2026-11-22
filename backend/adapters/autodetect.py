@@ -10,6 +10,7 @@ from bs4 import BeautifulSoup
 
 from . import json_index, rss_feed
 from .base import new_client, origin_of
+from ..services.url_safety import validate_external_url
 
 _REPACK_HINTS = ("repack", "fitgirl", "dodi", "elamigos", "kaos", "xatab", "cpg", "catalyst", "mechanics")
 _RETRO_HINTS = ("gog", "abandonware", "retro", "archive.org", "dosgames", "oldgames", "rom")
@@ -41,13 +42,13 @@ def _normalize_input_url(raw: str) -> str:
     u = (raw or "").strip()
     if not u:
         raise ValueError("Debes indicar una URL")
+    if u.lower().startswith(("javascript:", "data:", "file:", "ftp:", "gopher:")):
+        raise ValueError("Esquema de URL no permitido")
     if json_index.is_local_path(u) and u.lower().endswith(".json"):
         return u
     if not u.lower().startswith(("http://", "https://")):
         u = f"https://{u}"
-    parsed = urlparse(u)
-    if not parsed.netloc:
-        raise ValueError(f"URL no válida: {raw}")
+    validate_external_url(u.replace("{query}", "test"), resolve_dns=True)
     return u
 
 

@@ -94,6 +94,12 @@ def isolated_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(settings, "INVITE_CODE", "")
     monkeypatch.setattr(settings, "GITHUB_STATE_TOKEN", "")
     monkeypatch.setattr(settings, "GITHUB_STATE_REPO", "")
+    monkeypatch.setattr(settings, "TURSO_DATABASE_URL", "")
+    monkeypatch.setattr(settings, "TURSO_AUTH_TOKEN", "")
+    monkeypatch.setattr(settings, "CRON_SECRET", "")
+    from backend.services import auth, source_manager
+    auth.clear_auth_failures()
+    source_manager.clear_sources_cache()
     database.init_db()
     return tmp_path
 
@@ -754,6 +760,178 @@ def test_vercel_serverless_entrypoint_and_sync(isolated_env: Path, monkeypatch: 
         assert r_reg.status_code == 200
         # En modo Serverless (Vercel), el guardado en GitHub se ejecuta antes de cerrar la petición HTTP
         assert len(pushed_calls) == 1
+
+
+# --------------------------------------------------------------------------- 9. Turso HTTP Pipeline + Cron Sync
+
+def test_turso_http_client_and_cron_endpoint(isolated_env: Path, monkeypatch: pytest.MonkeyPatch):
+    from backend import turso_client
+    from backend.main import app
+
+    # Verificar codificación Hrana v2 (int -> string, float -> número, bool -> "1"/"0", null)
+    assert turso_client._encode_arg(None) == {"type": "null"}
+    assert turso_client._encode_arg(True) == {"type": "integer", "value": "1"}
+    assert turso_client._encode_arg(42) == {"type": "integer", "value": "42"}
+    assert turso_client._encode_arg(3.5) == {"type": "float", "value": 3.5}
+    assert turso_client._encode_arg("hola") == {"type": "text", "value": "hola"}
+    assert turso_client.normalize_pipeline_url("libsql://gamehub-demo.turso.io") == "https://gamehub-demo.turso.io/v2/pipeline"
+
+    # Verificar splitter SQL respetando BEGIN ... END de triggers
+    stmts = turso_client.split_sql_script(database.SCHEMA)
+    assert any("CREATE TRIGGER IF NOT EXISTS releases_ai" in s and "END" in s for s in stmts)
+    assert any("CREATE TABLE IF NOT EXISTS app_config" in s for s in stmts)
+
+    # Simular respuesta HTTP /v2/pipeline de Turso con MockTransport
+    seen_payloads: list[dict] = []
+
+    def turso_handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v2/pipeline"
+        assert request.headers.get("authorization") == "Bearer test_turso_tok"
+        body = json.loads(request.content.decode("utf-8"))
+        seen_payloads.append(body)
+        reqs = body.get("requests") or []
+        results = []
+        for r in reqs:
+            if r.get("type") == "close":
+                results.append({"type": "ok", "response": {"type": "close"}})
+            else:
+                sql = (r.get("stmt") or {}).get("sql", "")
+                if sql.strip().upper().startswith("SELECT"):
+                    results.append({
+                        "type": "ok",
+                        "response": {
+                            "type": "execute",
+                            "result": {
+                                "cols": [
+                                    {"name": "id", "decltype": "INTEGER"},
+                                    {"name": "name", "decltype": "TEXT"},
+                                ],
+                                "rows": [[
+                                    {"type": "integer", "value": "7"},
+                                    {"type": "text", "value": "GameHub"},
+                                ]],
+                                "affected_row_count": 0,
+                                "last_insert_rowid": None,
+                            },
+                        },
+                    })
+                else:
+                    results.append({
+                        "type": "ok",
+                        "response": {
+                            "type": "execute",
+                            "result": {
+                                "cols": [],
+                                "rows": [],
+                                "affected_row_count": 1,
+                                "last_insert_rowid": "99",
+                            },
+                        },
+                    })
+        return httpx.Response(200, json={"results": results})
+
+    turso_client.set_test_transport(httpx.MockTransport(turso_handler))
+    try:
+        conn = turso_client.TursoConnection("libsql://mock.turso.io", "test_turso_tok")
+        cur = conn.execute("SELECT id, name FROM demo WHERE id = ?", (7,))
+        row = cur.fetchone()
+        assert row is not None
+        assert row[0] == 7 and row["name"] == "GameHub"
+        assert dict(row) == {"id": 7, "name": "GameHub"}
+
+        ins = conn.executemany("INSERT INTO demo(name) VALUES (?)", [("A",), ("B",)])
+        assert ins.rowcount == 2
+        assert ins.lastrowid == 99
+        # executemany (>1 fila) envuelve en BEGIN ... COMMIT dentro de un único pipeline HTTP
+        last_reqs = seen_payloads[-1]["requests"]
+        assert last_reqs[0]["stmt"]["sql"] == "BEGIN"
+        assert last_reqs[-2]["stmt"]["sql"] == "COMMIT"
+        assert last_reqs[-1]["type"] == "close"
+    finally:
+        turso_client.set_test_transport(None)
+
+    # Verificar seguridad de /api/cron/sync con CRON_SECRET
+    monkeypatch.setattr(settings, "IS_WEB_MODE", True)
+    monkeypatch.setattr(settings, "REQUIRE_AUTH", True)
+    monkeypatch.setattr(settings, "CRON_SECRET", "super-cron-secret-2026")
+
+    with TestClient(app) as client:
+        assert client.get("/api/cron/sync?scope=feeds").status_code == 401
+        assert client.get("/api/cron/sync?scope=feeds", headers={"Authorization": "Bearer wrong"}).status_code == 401
+        r_ok = client.get(
+            "/api/cron/sync?scope=feeds",
+            headers={"Authorization": "Bearer super-cron-secret-2026"},
+        )
+        assert r_ok.status_code == 200
+        body = r_ok.json()
+        assert body["ok"] is True
+        assert body["scope"] == "feeds"
+        assert "feeds" in body and "duration_ms" in body
+
+
+# --------------------------------------------------------------------------- 10. Seguridad SSRF, Path Traversal y Cabeceras HTTP
+
+def test_ssrf_path_traversal_and_security_headers(isolated_env: Path, monkeypatch: pytest.MonkeyPatch):
+    from backend.main import app
+    from backend.services import calendar_parsers, release_calendar, url_safety
+
+    # Bloqueo SSRF de direcciones locales, privadas, metadata cloud y esquemas prohibidos
+    forbidden_urls = [
+        "http://127.0.0.1:8765/api/health",
+        "http://localhost/admin",
+        "http://169.254.169.254/latest/meta-data/",
+        "http://[::1]:8000/",
+        "http://192.168.1.1/",
+        "http://10.0.0.1/secret",
+        "http://metadata.google.internal/computeMetadata/v1/",
+        "file:///etc/passwd",
+        "javascript:alert(1)",
+        "http://user:pass@example.com/",
+    ]
+    for bad in forbidden_urls:
+        with pytest.raises(ValueError):
+            url_safety.validate_external_url(bad, resolve_dns=False)
+
+    # URLs públicas válidas sí pasan
+    assert url_safety.validate_external_url("https://store.steampowered.com", resolve_dns=False).startswith("https://")
+
+    # Path traversal en modo Web bloqueado
+    monkeypatch.setattr(settings, "IS_WEB_MODE", True)
+    with pytest.raises(ValueError):
+        url_safety.validate_local_json_path("file:///etc/passwd")
+    with pytest.raises(ValueError):
+        url_safety.validate_local_json_path("../../../Windows/win.ini")
+    with pytest.raises(ValueError):
+        url_safety.validate_local_json_path("/tmp/otro.json")
+
+    # En endpoints FastAPI: autodetect y sources rechazan SSRF con 400 + cabeceras de seguridad presentes
+    monkeypatch.setattr(settings, "IS_WEB_MODE", False)
+    monkeypatch.setattr(settings, "REQUIRE_AUTH", False)
+    with TestClient(app) as client:
+        r_ping = client.get("/api/ping")
+        assert r_ping.status_code == 200
+        assert r_ping.headers.get("x-content-type-options") == "nosniff"
+        assert r_ping.headers.get("x-frame-options") == "DENY"
+        assert r_ping.headers.get("referrer-policy") == "strict-origin-when-cross-origin"
+
+        assert client.post("/api/sources/autodetect", json={"url": "http://127.0.0.1:8080"}).status_code == 400
+        assert client.post("/api/sources/autodetect", json={"url": "http://169.254.169.254/latest"}).status_code == 400
+        assert (
+            client.post(
+                "/api/sources",
+                json={"name": "SSRF", "type": "rss", "url": "http://127.0.0.1/feed"},
+            ).status_code
+            == 400
+        )
+
+    # Paridad de re-exportación tras la modularización de release_calendar
+    assert release_calendar.parse_steam_date is calendar_parsers.parse_steam_date
+    assert release_calendar.parse_steam_search_html is calendar_parsers.parse_steam_search_html
+    assert release_calendar.parse_nintendo_solr_docs is calendar_parsers.parse_nintendo_solr_docs
+    assert release_calendar.parse_playstation_upcoming_html is calendar_parsers.parse_playstation_upcoming_html
+    assert release_calendar.parse_wikipedia_release_html is calendar_parsers.parse_wikipedia_release_html
+
+
 
 
 
